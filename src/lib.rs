@@ -5,4 +5,6 @@ pub mod load;
 pub mod manifest;
 pub mod oracle;
 pub mod prefixes;
+pub mod report;
+pub mod suite;
 pub mod verdict;

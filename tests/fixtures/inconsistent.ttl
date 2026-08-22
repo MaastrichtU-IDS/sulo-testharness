@@ -1,0 +1,12 @@
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix ex:  <http://example.org/> .
+
+<http://example.org/onto> a owl:Ontology .
+
+ex:A a owl:Class .
+ex:B a owl:Class .
+ex:A owl:disjointWith ex:B .
+
+# x is both A and B, which are disjoint: unsatisfiable, hence the
+# whole ontology is inconsistent.
+ex:x a ex:A, ex:B .
