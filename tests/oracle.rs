@@ -182,8 +182,9 @@ fn annotation_property_predicate_is_rejected() {
         property: "http://purl.org/dc/terms/title".into(),
         object: "https://w3id.org/sulo/Feature".into(),
     };
-    let err =
-        holds(&onto, &claim).expect_err("dcterms:title is an annotation property, not queryable");
+    let err = holds(&onto, &claim)
+        .expect_err("dcterms:title is an annotation property, not queryable")
+        .to_string();
     assert!(
         err.contains("http://purl.org/dc/terms/title"),
         "error message should name the rejected predicate, got: {err}"
@@ -202,8 +203,9 @@ fn undeclared_predicate_is_rejected() {
             language: None,
         },
     };
-    let err =
-        holds(&onto, &claim).expect_err("rdfs:label is not declared as a property in sulo.ttl");
+    let err = holds(&onto, &claim)
+        .expect_err("rdfs:label is not declared as a property in sulo.ttl")
+        .to_string();
     assert!(
         err.contains("http://www.w3.org/2000/01/rdf-schema#label"),
         "error message should name the rejected predicate, got: {err}"
