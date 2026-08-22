@@ -140,7 +140,7 @@ fix in an existing workflow, unrelated to logical regressions.
 | Location | Standalone `sulo-testharness` repository, consumed by `AIDAVA-DEV/sulo` CI as a pinned dependency | Mirrors the `horned-owl` / `horned-roundtrip` split; reusable against any SULO-based ontology; keeps the SULO repository lean |
 | Implementation | Rust CLI plus a composite GitHub Action | No JVM, no interpreter, hermetic; dogfoods `rustdl` on a real ontology; consumer CI needs no toolchain |
 | Reasoning | `owl-dl-reasoner` (rustdl) as an in-process library | Sound SROIQ(D). Covers most of what SULO uses, with two measured exceptions: the covering half of `DisjointUnion` and data-range `allValuesFrom`. Both are handled, see sections 6.1 and 9 |
-| Parsing | `horned-owl` 2.0.0 | Its RDF reader is parameterised over `oxrdfio::RdfFormat`, so Turtle is read directly with no conversion step |
+| Parsing | `horned-owl` at the **same git rev rustdl pins**, `b188edaf7c92600918f0524962d928097ecd6b4d` (declares version 1.4.0) | Its RDF reader is parameterised over `oxrdfio::RdfFormat`, so Turtle is read directly with no conversion step. The rev matters: rustdl pins horned-owl by git rev, so depending on the published 2.0.0 instead would give two distinct crate instances whose `SetOntology` types cannot interoperate. Verified that this rev already contains the format-parameterisation commit `e6e3c49` |
 | SPARQL | `oxigraph` in-memory store | Competency questions run over asserted plus materialised triples |
 | Test declaration | YAML manifest plus sidecar `.ttl` and `.rq` files | Greppable, diff-friendly, adaptable by a non-programmer; no RDF ceremony for scaffolding |
 | Verdict architecture | Typed claims dispatched to reasoner queries, separate CQ path | Keeps the entailment oracle a real reasoner rather than a triple dump |
@@ -343,9 +343,18 @@ SULO specifically:
 
 ### 6.2 Dependencies
 
-`horned-owl` 2.0.0, `owl-dl-reasoner`, `oxigraph`, `oxrdfio`, `serde`,
-`serde_yaml`, `clap`. Pinned exactly, because the oracle's behaviour is the
-harness's semantics.
+`horned-owl` (git rev `b188eda`, matching rustdl's pin exactly, see section 4),
+`owl-dl-reasoner`, `oxigraph`, `oxrdfio`, `serde`, `serde_yaml`, `clap`. Pinned
+exactly, because the oracle's behaviour is the harness's semantics.
+
+**The horned-owl pin is a hard constraint, not a preference.** rustdl depends on
+horned-owl via `{ git = "https://github.com/micheldumontier/horned-owl", rev =
+"b188eda..." }`. Cargo unifies a git dependency only when the source and rev
+match exactly, so the harness must name the same rev. Depending on crates.io
+`horned-owl = "2.0.0"` compiles two separate copies of the crate, and the
+`SetOntology` the harness parses is then a different type from the one
+`owl_dl_reasoner::is_consistent` accepts. This surfaces as a confusing
+type-mismatch error, so phase 1 pins it up front.
 
 ## 7. Manifest schema
 
@@ -408,11 +417,15 @@ CURIEs against one prefix map, assembled in this order, later winning:
 2. A suite-level `prefixes.yaml`, holding the shared bindings (`ex:`, `obo:`).
 3. The case's own `prefixes:` block.
 
-Turtle fragments are parsed with this map prepended as `@prefix` lines, so
-authors never declare prefixes inline. Manchester expressions are rewritten to
-full `<IRI>` form before reaching rustdl, whose parser rejects bare names and
-undeclared prefixes. An unresolvable CURIE anywhere is a configuration error
-(exit 2), never a failed check.
+The map is held as a `curie::PrefixMapping`, which both consumers accept
+directly. Turtle fragments are parsed with it prepended as `@prefix` lines, so
+authors never declare prefixes inline. Manchester expressions are handed the same
+mapping via `horned_owl::io::omn::reader::parse_class_expression(s, pm, build)`,
+which resolves CURIEs natively, so no rewriting to full `<IRI>` form is needed.
+Bare unprefixed names remain invalid; the parse failure observed during design
+came from passing an empty `PrefixMapping`, not from a parser limitation. An
+unresolvable CURIE anywhere is a configuration error (exit 2), never a failed
+check.
 
 ### 7.3 `expect_rows` comparison semantics
 
