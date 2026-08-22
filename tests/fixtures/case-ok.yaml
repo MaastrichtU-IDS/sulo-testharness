@@ -1,0 +1,13 @@
+id: pro-role-chain
+description: Participation of the role holder is recovered via the PRO role chain.
+data: data/pro-encounter.ttl
+prefixes:
+  ex: http://example.org/
+entails: |
+  ex:encounter sulo:hasParticipant ex:alice .
+not_entails: |
+  ex:alice sulo:hasParticipant ex:encounter .
+entails_manchester:
+  - sub_expr: "sulo:Feature"
+    sup_expr: "sulo:Capability or sulo:InformationObject"
+tags: [pattern, pro]

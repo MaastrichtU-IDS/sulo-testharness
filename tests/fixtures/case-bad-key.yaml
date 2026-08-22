@@ -1,0 +1,4 @@
+id: typo-case
+description: Has a key the schema does not define.
+entials: |
+  ex:a sulo:isPartOf ex:b .

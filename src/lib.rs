@@ -3,3 +3,4 @@
 pub mod load;
 pub mod verdict;
 pub mod prefixes;
+pub mod manifest;
