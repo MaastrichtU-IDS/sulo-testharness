@@ -1,0 +1,15 @@
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix ex:  <http://example.org/> .
+
+<http://example.org/onto> a owl:Ontology .
+
+ex:F a owl:Class ;
+     owl:disjointUnionOf ( ex:A ex:B ) .
+ex:A a owl:Class .
+ex:B a owl:Class .
+
+# An F that is neither an A nor a B. The covering half of the
+# disjoint union makes this unsatisfiable.
+ex:x a ex:F,
+       [ a owl:Class ; owl:complementOf ex:A ],
+       [ a owl:Class ; owl:complementOf ex:B ] .

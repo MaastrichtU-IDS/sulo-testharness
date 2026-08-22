@@ -18,7 +18,10 @@ use std::path::{Path, PathBuf};
 
 use horned_owl::io::ParserConfiguration;
 use horned_owl::io::rdf::reader::read as read_rdf;
-use horned_owl::model::{MutableOntology, RcStr};
+use horned_owl::model::{
+    ClassExpression, Component, DisjointClasses, DisjointUnion, EquivalentClasses, MutableOntology,
+    RcStr,
+};
 use horned_owl::ontology::set::SetOntology;
 
 /// A loaded ontology plus anything lost on the way in.
@@ -81,7 +84,8 @@ pub fn load_file(path: &Path) -> Result<Loaded, LoadError> {
         ));
     }
 
-    let ontology: SetOntology<RcStr> = concrete.into();
+    let mut ontology: SetOntology<RcStr> = concrete.into();
+    lower_disjoint_unions(&mut ontology);
 
     // Second channel: what the reasoner's IR cannot represent.
     match owl_dl_reasoner::dropped_axioms(&ontology) {
@@ -102,6 +106,51 @@ pub fn load_file(path: &Path) -> Result<Loaded, LoadError> {
     }
 
     Ok(Loaded { ontology, loss })
+}
+
+/// Rewrite every `DisjointUnion(C, D1..Dn)` into the two axioms it
+/// abbreviates: `EquivalentClasses(C, ObjectUnionOf(D1..Dn))` and
+/// `DisjointClasses(D1..Dn)`. Returns how many were rewritten.
+///
+/// WORKAROUND for a rustdl bug: the reasoner enforces the
+/// disjointness half of a `DisjointUnion` but silently loses the
+/// covering half in the ABox path, with no dropped-axiom diagnostic
+/// and no incomplete flag. Verified: an individual typed `F` and
+/// explicitly neither `A` nor `B` under `DisjointUnion(F, A, B)` is
+/// reported consistent. Spelling the axiom out restores the covering
+/// behaviour.
+///
+/// The original `DisjointUnion` is left in place: it is harmless and
+/// keeps the ontology faithful to its source. Remove this function
+/// when the upstream bug is fixed.
+pub fn lower_disjoint_unions(onto: &mut SetOntology<RcStr>) -> usize {
+    // Collect first: we cannot mutate while iterating.
+    let unions: Vec<DisjointUnion<RcStr>> = onto
+        .iter()
+        .filter_map(|ac| match &ac.component {
+            Component::DisjointUnion(du) => Some(du.clone()),
+            _ => None,
+        })
+        .collect();
+
+    let count = unions.len();
+
+    for DisjointUnion(class, members) in unions {
+        let union_of = ClassExpression::ObjectUnionOf(members.clone());
+        onto.insert(EquivalentClasses(vec![
+            ClassExpression::Class(class),
+            union_of,
+        ]));
+
+        // A one-member union carries no disjointness; its covering
+        // half is a plain equivalence, which is handled above
+        // regardless of member count.
+        if members.len() >= 2 {
+            onto.insert(DisjointClasses(members));
+        }
+    }
+
+    count
 }
 
 /// Fold `other`'s components into `base`.
