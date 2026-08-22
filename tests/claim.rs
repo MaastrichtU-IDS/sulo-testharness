@@ -25,12 +25,14 @@ fn classifies_a_subsumption() {
 #[test]
 fn subclassof_nothing_becomes_unsatisfiable() {
     let claims = parse_fragment("sulo:Role rdfs:subClassOf owl:Nothing .", &pm()).unwrap();
+    assert_eq!(claims.len(), 1, "expected exactly one claim");
     assert!(matches!(&claims[0], Claim::Unsatisfiable { .. }));
 }
 
 #[test]
 fn classifies_a_class_assertion() {
     let claims = parse_fragment("ex:alice a sulo:SpatialObject .", &pm()).unwrap();
+    assert_eq!(claims.len(), 1, "expected exactly one claim");
     match &claims[0] {
         Claim::ClassAssertion { individual, class } => {
             assert_eq!(individual, "http://example.org/alice");
@@ -43,12 +45,14 @@ fn classifies_a_class_assertion() {
 #[test]
 fn classifies_an_object_property_assertion() {
     let claims = parse_fragment("ex:encounter sulo:hasParticipant ex:alice .", &pm()).unwrap();
+    assert_eq!(claims.len(), 1, "expected exactly one claim");
     assert!(matches!(&claims[0], Claim::ObjectPropertyAssertion { .. }));
 }
 
 #[test]
 fn classifies_a_typed_data_property_assertion() {
     let claims = parse_fragment(r#"ex:m sulo:hasValue "37.8"^^xsd:double ."#, &pm()).unwrap();
+    assert_eq!(claims.len(), 1, "expected exactly one claim");
     match &claims[0] {
         Claim::DataPropertyAssertion { literal, .. } => {
             assert_eq!(literal.lexical, "37.8");
@@ -63,6 +67,7 @@ fn classifies_an_untyped_data_property_assertion() {
     // A bare Turtle literal with no `^^` suffix. What datatype IRI does
     // oxrdf actually report here? Recorded in task-6-report.md.
     let claims = parse_fragment(r#"ex:m sulo:hasNote "plain text" ."#, &pm()).unwrap();
+    assert_eq!(claims.len(), 1, "expected exactly one claim");
     match &claims[0] {
         Claim::DataPropertyAssertion { literal, .. } => {
             assert_eq!(literal.lexical, "plain text");
