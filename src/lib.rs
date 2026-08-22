@@ -3,5 +3,6 @@
 pub mod claim;
 pub mod load;
 pub mod manifest;
+pub mod oracle;
 pub mod prefixes;
 pub mod verdict;

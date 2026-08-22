@@ -1,0 +1,7 @@
+@prefix sulo: <https://w3id.org/sulo/> .
+@prefix ex:   <http://example.org/> .
+
+ex:a sulo:isPartOf ex:b .
+ex:b sulo:isPartOf ex:c .
+ex:d a sulo:SpatialObject .
+ex:m sulo:hasValue "hello" .
