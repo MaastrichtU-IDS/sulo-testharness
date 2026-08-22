@@ -112,17 +112,27 @@ pub fn load_file(path: &Path) -> Result<Loaded, LoadError> {
 /// abbreviates: `EquivalentClasses(C, ObjectUnionOf(D1..Dn))` and
 /// `DisjointClasses(D1..Dn)`. Returns how many were rewritten.
 ///
-/// WORKAROUND for a rustdl bug: the reasoner enforces the
-/// disjointness half of a `DisjointUnion` but silently loses the
-/// covering half in the ABox path, with no dropped-axiom diagnostic
-/// and no incomplete flag. Verified: an individual typed `F` and
+/// This is semantics-preserving, not a correction: `DisjointUnion(C,
+/// D1..Dn)` means exactly `EquivalentClasses(C, ObjectUnionOf(D1..Dn))`
+/// plus `DisjointClasses(D1..Dn)` by the OWL spec, so spelling it out
+/// cannot assert anything the original axiom did not already mean. It
+/// is kept as defense-in-depth so the harness does not depend on the
+/// reasoner implementing `DisjointUnion`'s covering half natively.
+///
+/// That dependency is not hypothetical. Measured: at the pinned
+/// `owl-dl-reasoner` tag v0.4.22, an individual typed `F` and
 /// explicitly neither `A` nor `B` under `DisjointUnion(F, A, B)` is
-/// reported consistent. Spelling the axiom out restores the covering
-/// behaviour.
+/// correctly reported inconsistent even without this expansion; a
+/// later rustdl working-tree build (14 commits past v0.4.22, in
+/// commits about the pseudo-model prune silently losing entailments)
+/// reported the same case consistent, i.e. it lost the covering half.
+/// The regression is upstream of the version we pin, not present in
+/// it, but this expansion stays so a future rustdl bump landing that
+/// regression (or a similar one) does not silently weaken the
+/// harness.
 ///
 /// The original `DisjointUnion` is left in place: it is harmless and
-/// keeps the ontology faithful to its source. Remove this function
-/// when the upstream bug is fixed.
+/// keeps the ontology faithful to its source.
 pub fn lower_disjoint_unions(onto: &mut SetOntology<RcStr>) -> usize {
     // Collect first: we cannot mutate while iterating.
     let unions: Vec<DisjointUnion<RcStr>> = onto
