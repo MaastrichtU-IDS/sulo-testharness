@@ -347,14 +347,29 @@ SULO specifically:
 `owl-dl-reasoner`, `oxigraph`, `oxrdfio`, `serde`, `serde_yaml`, `clap`. Pinned
 exactly, because the oracle's behaviour is the harness's semantics.
 
-**The horned-owl pin is a hard constraint, not a preference.** rustdl depends on
-horned-owl via `{ git = "https://github.com/micheldumontier/horned-owl", rev =
-"b188eda..." }`. Cargo unifies a git dependency only when the source and rev
-match exactly, so the harness must name the same rev. Depending on crates.io
-`horned-owl = "2.0.0"` compiles two separate copies of the crate, and the
-`SetOntology` the harness parses is then a different type from the one
-`owl_dl_reasoner::is_consistent` accepts. This surfaces as a confusing
-type-mismatch error, so phase 1 pins it up front.
+**The horned-owl pin is a hard constraint, and naming the git rev directly does
+not achieve it.** Measured during phase 1. rustdl's `owl-dl-reasoner` depends on
+**crates.io** `horned-owl = "1.4"`, and cargo will not unify a git dependency
+with a crates.io dependency on the same package. Declaring
+`horned-owl = { git = ..., rev = ... }` in `[dependencies]` therefore yields two
+copies, `cargo tree -p horned-owl` reports "ambiguous specification", and the
+`SetOntology` the harness parses becomes a different type from the one
+`owl_dl_reasoner::is_consistent` accepts.
+
+The form that actually resolves is a crates.io dependency plus a patch, which is
+how rustdl's own `Cargo.toml` does it:
+
+```toml
+[dependencies]
+horned-owl = { version = "1.4", default-features = false }
+
+[patch.crates-io]
+horned-owl = { git = "https://github.com/micheldumontier/horned-owl", rev = "b188edaf7c92600918f0524962d928097ecd6b4d" }
+```
+
+Verify with `cargo tree -p horned-owl`, which must print exactly one instance, and
+with `Cargo.lock`, which must hold a single `horned-owl` whose `source` is the
+pinned git rev.
 
 ## 7. Manifest schema
 
