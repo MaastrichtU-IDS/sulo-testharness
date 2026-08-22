@@ -1,0 +1,10 @@
+@prefix sulo: <https://w3id.org/sulo/> .
+@prefix ex:   <http://example.org/> .
+
+ex:encounter a sulo:Process ;
+    sulo:hasParticipant ex:doctorRole .
+
+ex:doctorRole a sulo:Role ;
+    sulo:isFeatureOf ex:alice .
+
+ex:alice a sulo:Object .

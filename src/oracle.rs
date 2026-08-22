@@ -121,6 +121,7 @@
 
 use std::time::{Duration, Instant};
 
+use curie::PrefixMapping;
 use horned_owl::model::{
     AnnotationProperty, Build, ClassExpression, Component, DataProperty, DeclareAnnotationProperty,
     DeclareDataProperty, DeclareObjectProperty, EquivalentClasses, Individual, MutableOntology,
@@ -128,7 +129,7 @@ use horned_owl::model::{
 };
 use horned_owl::ontology::set::SetOntology;
 
-use crate::claim::{Claim, Literal};
+use crate::claim::{Claim, Literal, parse_ce};
 use crate::verdict::{CheckOutcome, IndeterminateReason, Verdict};
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
@@ -263,16 +264,51 @@ fn ensure_realize_deadline_set() {
     });
 }
 
+/// The one bounded-probe entry point in this module: define a fresh
+/// class `Q ≡ ce` on a cloned ontology and ask only its
+/// satisfiability, via `is_class_satisfiable_with_timeout`
+/// (`Ok(None)` on a genuine, cooperatively-checked deadline expiry).
+/// Every class-expression question this module answers — the two
+/// narrow dispatch fallbacks below, and the three Manchester checks
+/// (`check_subsumption_expr`, `check_instance_expr`,
+/// `check_satisfiable_expr`) — is reduced to exactly this call, so
+/// this is the single place that ever touches
+/// `is_class_satisfiable_with_timeout` and the only place a change to
+/// the probing strategy needs to happen. None of this module calls
+/// the unbounded `class_expression_entailed_subclass`,
+/// `class_expression_instances`, or `class_expression_satisfiable`
+/// (which itself has no deadline parameter at all): those internally
+/// loop or search without a cooperative deadline check — see the
+/// module doc for the 24-minute hang that motivated retiring them.
+fn probe_satisfiable(
+    onto: &SetOntology<RcStr>,
+    ce: ClassExpression<RcStr>,
+    deadline: Duration,
+) -> Result<bool, OracleFailure> {
+    let build: Build<RcStr> = Build::new();
+    let mut probed = onto.clone();
+    probed.insert(EquivalentClasses(vec![
+        ClassExpression::Class(build.class(PROBE_IRI)),
+        ce,
+    ]));
+
+    match owl_dl_reasoner::is_class_satisfiable_with_timeout(&probed, PROBE_IRI, deadline) {
+        Ok(Some(sat)) => Ok(sat),
+        Ok(None) => Err(OracleFailure::Timeout),
+        Err(e) => Err(OracleFailure::Error(e.to_string())),
+    }
+}
+
 /// Bounded check for "is `subject` an instance of `ce`?". Standard OWL
 /// reduction: `subject` is an instance of `ce` in every model iff
-/// `{subject} ⊓ ¬ce` is UNsatisfiable, so a fresh probe class
-/// `Q ≡ {subject} ⊓ ¬ce` is defined on a cloned ontology and only its
-/// satisfiability is asked, via `is_class_satisfiable_with_timeout`
-/// (`Ok(None)` on a genuine, cooperatively-checked deadline expiry).
-/// This is what replaces the unbounded `class_expression_instances`
-/// (whose internal `instances_of` loops over every named individual
-/// in the ontology — see the module doc) for the two narrow fallbacks
-/// that still need a real reasoner call.
+/// `{subject} ⊓ ¬ce` is UNsatisfiable, so this builds that intersection
+/// and hands it to `probe_satisfiable`. This is what replaces the
+/// unbounded `class_expression_instances` (whose internal
+/// `instances_of` loops over every named individual in the ontology —
+/// see the module doc) for the two narrow dispatch fallbacks that
+/// still need a real reasoner call, and is reused as-is by
+/// `check_instance_expr` below: membership of a named individual in a
+/// Manchester expression is the exact same shape.
 fn entailed_via_satisfiability_probe(
     onto: &SetOntology<RcStr>,
     subject: &str,
@@ -287,17 +323,7 @@ fn entailed_via_satisfiability_probe(
         ClassExpression::ObjectComplementOf(Box::new(ce)),
     ]);
 
-    let mut probed = onto.clone();
-    probed.insert(EquivalentClasses(vec![
-        ClassExpression::Class(build.class(PROBE_IRI)),
-        probe_definition,
-    ]));
-
-    match owl_dl_reasoner::is_class_satisfiable_with_timeout(&probed, PROBE_IRI, deadline) {
-        Ok(Some(sat)) => Ok(!sat),
-        Ok(None) => Err(OracleFailure::Timeout),
-        Err(e) => Err(OracleFailure::Error(e.to_string())),
-    }
+    probe_satisfiable(onto, probe_definition, deadline).map(|sat| !sat)
 }
 
 /// Does the claim hold under the reasoner, using this module's
@@ -472,14 +498,32 @@ fn to_horned_literal(build: &Build<RcStr>, lit: &Literal) -> horned_owl::model::
     }
 }
 
-/// Run one claim against its expectation and produce a verdict.
+/// Turn a raw bool-plus-expectation into a verdict. The single source
+/// of truth for the whole harness's central asymmetry, shared by
+/// `check` and by all three Manchester class-expression checks below.
 ///
 /// The asymmetry is the whole point. A reasoner that says "entailed"
-/// is trustworthy because it is sound. A reasoner that says "not
-/// entailed" has only failed to find a proof, so a negative
-/// expectation it satisfies yields `UnrefutedPass`, not `Pass`. A
-/// timeout is neither: it is never promoted to Fail or Pass, only to
-/// Indeterminate.
+/// (or "held") is trustworthy because it is sound. A reasoner that
+/// says "not entailed" has only failed to find a proof, so a negative
+/// expectation it satisfies yields `UnrefutedPass`, not `Pass`.
+/// Timeouts never reach this function: they are handled by the caller
+/// and mapped to `Indeterminate` before `held` is known.
+fn verdict_for(held: bool, expect: Expectation, what: &str) -> Verdict {
+    match (held, expect) {
+        (true, Expectation::Entailed) => Verdict::Pass,
+        (true, Expectation::NotEntailed) => {
+            Verdict::Fail(format!("expected NOT to hold, but it does: {what}"))
+        }
+        (false, Expectation::Entailed) => Verdict::Fail(format!(
+            "expected to hold, but no proof was found: {what}. \
+             Incompleteness is a possible cause; the CI differential settles it."
+        )),
+        (false, Expectation::NotEntailed) => Verdict::UnrefutedPass,
+    }
+}
+
+/// Run one claim against its expectation and produce a verdict. See
+/// `verdict_for` for the asymmetry this delegates to.
 pub fn check(onto: &SetOntology<RcStr>, claim: &Claim, expect: Expectation) -> CheckOutcome {
     let name = format!("{claim:?}");
 
@@ -488,22 +532,125 @@ pub fn check(onto: &SetOntology<RcStr>, claim: &Claim, expect: Expectation) -> C
         Err(OracleFailure::Error(msg)) => {
             Verdict::Indeterminate(IndeterminateReason::OracleError(msg))
         }
-        Ok(true) => match expect {
-            Expectation::Entailed => Verdict::Pass,
-            Expectation::NotEntailed => Verdict::Fail(format!(
-                "expected NOT entailed, but it is entailed: {claim:?}"
-            )),
-        },
-        Ok(false) => match expect {
-            Expectation::Entailed => Verdict::Fail(format!(
-                "expected entailed, but no proof was found: {claim:?}. \
-                 Incompleteness is a possible cause; the CI differential settles it."
-            )),
-            Expectation::NotEntailed => Verdict::UnrefutedPass,
-        },
+        Ok(held) => verdict_for(held, expect, &name),
     };
 
     CheckOutcome { name, verdict }
+}
+
+/// Is `sub_expr` subsumed by `sup_expr`? Reduced to the standard OWL
+/// equivalence: `sub_expr ⊑ sup_expr` in every model iff
+/// `sub_expr ⊓ ¬sup_expr` is UNsatisfiable. Never calls the unbounded
+/// `class_expression_entailed_subclass`; see `probe_satisfiable`.
+pub fn check_subsumption_expr(
+    onto: &SetOntology<RcStr>,
+    sub_expr: &str,
+    sup_expr: &str,
+    expect: Expectation,
+    pm: &PrefixMapping,
+) -> CheckOutcome {
+    let what = format!("{sub_expr} subClassOf {sup_expr}");
+    let (sub, sup) = match (parse_ce(sub_expr, pm), parse_ce(sup_expr, pm)) {
+        (Ok(a), Ok(b)) => (a, b),
+        (Err(e), _) | (_, Err(e)) => {
+            return CheckOutcome {
+                name: what,
+                verdict: Verdict::Indeterminate(IndeterminateReason::OracleError(e.to_string())),
+            };
+        }
+    };
+
+    let intersection = ClassExpression::ObjectIntersectionOf(vec![
+        sub,
+        ClassExpression::ObjectComplementOf(Box::new(sup)),
+    ]);
+
+    let verdict = match probe_satisfiable(onto, intersection, REASONER_DEADLINE) {
+        Ok(sat) => verdict_for(!sat, expect, &what),
+        Err(OracleFailure::Timeout) => Verdict::Indeterminate(IndeterminateReason::Timeout),
+        Err(OracleFailure::Error(msg)) => {
+            Verdict::Indeterminate(IndeterminateReason::OracleError(msg))
+        }
+    };
+
+    CheckOutcome {
+        name: what,
+        verdict,
+    }
+}
+
+/// Is `individual` provably in `expr`? Exactly the shape Task 7 uses
+/// for its object-property fallback (`entailed_via_satisfiability_probe`),
+/// reused directly rather than duplicated.
+pub fn check_instance_expr(
+    onto: &SetOntology<RcStr>,
+    individual: &str,
+    expr: &str,
+    expect: Expectation,
+    pm: &PrefixMapping,
+) -> CheckOutcome {
+    let what = format!("{individual} instanceOf {expr}");
+    let ce = match parse_ce(expr, pm) {
+        Ok(c) => c,
+        Err(e) => {
+            return CheckOutcome {
+                name: what,
+                verdict: Verdict::Indeterminate(IndeterminateReason::OracleError(e.to_string())),
+            };
+        }
+    };
+
+    let verdict = match entailed_via_satisfiability_probe(onto, individual, ce, REASONER_DEADLINE) {
+        Ok(held) => verdict_for(held, expect, &what),
+        Err(OracleFailure::Timeout) => Verdict::Indeterminate(IndeterminateReason::Timeout),
+        Err(OracleFailure::Error(msg)) => {
+            Verdict::Indeterminate(IndeterminateReason::OracleError(msg))
+        }
+    };
+
+    CheckOutcome {
+        name: what,
+        verdict,
+    }
+}
+
+/// Does `expr` have a model? Guards a pattern going unsatisfiable.
+/// `expect` follows the same `verdict_for` asymmetry as the other two
+/// checks: `Entailed` means "expect satisfiable" (the common case,
+/// e.g. guarding a competency-question pattern), `NotEntailed` means
+/// "expect unsatisfiable". A direct, always-expect-satisfiable claim
+/// about a *named* class already has a dedicated path
+/// (`Claim::Unsatisfiable`, via `holds`); this is for a raw Manchester
+/// expression with no class declaration behind it.
+pub fn check_satisfiable_expr(
+    onto: &SetOntology<RcStr>,
+    expr: &str,
+    expect: Expectation,
+    pm: &PrefixMapping,
+) -> CheckOutcome {
+    let what = format!("satisfiable: {expr}");
+    let ce = match parse_ce(expr, pm) {
+        Ok(c) => c,
+        Err(e) => {
+            return CheckOutcome {
+                name: what,
+                verdict: Verdict::Indeterminate(IndeterminateReason::OracleError(e.to_string())),
+            };
+        }
+    };
+
+    let verdict = match probe_satisfiable(onto, ce, REASONER_DEADLINE) {
+        Ok(sat) => verdict_for(sat, expect, &what),
+        Err(OracleFailure::Timeout) => Verdict::Indeterminate(IndeterminateReason::Timeout),
+        Err(OracleFailure::Error(msg)) => {
+            Verdict::Indeterminate(IndeterminateReason::OracleError(msg))
+        }
+    };
+
+    CheckOutcome {
+        name: what,
+        verdict,
+    }
 }
 
 #[cfg(test)]

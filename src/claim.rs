@@ -7,6 +7,7 @@
 //! green for a check that never ran.
 
 use curie::PrefixMapping;
+use horned_owl::model::{Build, ClassExpression, RcStr};
 use oxrdf::{NamedOrBlankNode, Term, Triple};
 use oxrdfio::{RdfFormat, RdfParser};
 
@@ -65,6 +66,8 @@ pub enum ClaimError {
     Prefix(#[from] PrefixError),
     #[error("a literal object is only meaningful for a data property, got predicate {0}")]
     LiteralWithNonDataPredicate(String),
+    #[error("invalid Manchester class expression '{expr}': {message}")]
+    ManchesterSyntax { expr: String, message: String },
 }
 
 /// Parse a fragment into claims. `pm` supplies the `@prefix` header.
@@ -85,6 +88,19 @@ pub fn parse_fragment(fragment: &str, pm: &PrefixMapping) -> Result<Vec<Claim>, 
     }
 
     Ok(claims)
+}
+
+/// Parse a Manchester Syntax class expression. CURIEs resolve against
+/// `pm` natively (`parse_class_expression` takes the `PrefixMapping`
+/// directly), so no rewriting to full `<IRI>` form is needed here.
+pub fn parse_ce(expr: &str, pm: &PrefixMapping) -> Result<ClassExpression<RcStr>, ClaimError> {
+    let build: Build<RcStr> = Build::new();
+    horned_owl::io::omn::reader::parse_class_expression(expr, pm, &build).map_err(|e| {
+        ClaimError::ManchesterSyntax {
+            expr: expr.to_string(),
+            message: e.to_string(),
+        }
+    })
 }
 
 fn classify(t: &Triple) -> Result<Claim, ClaimError> {
