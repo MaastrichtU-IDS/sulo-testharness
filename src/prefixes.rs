@@ -39,10 +39,7 @@ pub fn base_mapping() -> PrefixMapping {
 
 /// Layer `overrides` on top of `base`. Later bindings win.
 #[must_use]
-pub fn with_overrides(
-    base: &PrefixMapping,
-    overrides: &BTreeMap<String, String>,
-) -> PrefixMapping {
+pub fn with_overrides(base: &PrefixMapping, overrides: &BTreeMap<String, String>) -> PrefixMapping {
     let mut pm = base.clone();
     for (prefix, iri) in overrides {
         let _ = pm.add_prefix(prefix, iri);

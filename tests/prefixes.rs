@@ -1,10 +1,13 @@
 use std::collections::BTreeMap;
-use sulo_testharness::prefixes::{base_mapping, expand, with_overrides, PrefixError};
+use sulo_testharness::prefixes::{PrefixError, base_mapping, expand, with_overrides};
 
 #[test]
 fn sulo_and_the_standard_prefixes_are_always_bound() {
     let pm = base_mapping();
-    assert_eq!(expand(&pm, "sulo:Process").unwrap(), "https://w3id.org/sulo/Process");
+    assert_eq!(
+        expand(&pm, "sulo:Process").unwrap(),
+        "https://w3id.org/sulo/Process"
+    );
     assert_eq!(
         expand(&pm, "owl:Thing").unwrap(),
         "http://www.w3.org/2002/07/owl#Thing"
@@ -26,7 +29,10 @@ fn case_overrides_win() {
 #[test]
 fn overrides_replace_existing_base_prefixes() {
     let mut over = BTreeMap::new();
-    over.insert("sulo".to_string(), "http://example.org/custom-sulo/".to_string());
+    over.insert(
+        "sulo".to_string(),
+        "http://example.org/custom-sulo/".to_string(),
+    );
     let pm = with_overrides(&base_mapping(), &over);
     assert_eq!(
         expand(&pm, "sulo:Process").unwrap(),

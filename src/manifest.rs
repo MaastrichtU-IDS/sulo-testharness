@@ -13,9 +13,15 @@ use serde::Deserialize;
 #[derive(Debug, thiserror::Error)]
 pub enum ManifestError {
     #[error("cannot read {path}: {source}")]
-    Io { path: PathBuf, source: std::io::Error },
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     #[error("invalid manifest {path}: {source}")]
-    Yaml { path: PathBuf, source: serde_yaml::Error },
+    Yaml {
+        path: PathBuf,
+        source: serde_yaml::Error,
+    },
     #[error("manifest {path} has an empty id")]
     EmptyId { path: PathBuf },
 }
@@ -114,13 +120,19 @@ pub struct Case {
 }
 
 pub fn load_case(path: &Path) -> Result<Case, ManifestError> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|source| ManifestError::Io { path: path.to_path_buf(), source })?;
-    let raw: RawCase = serde_yaml::from_str(&text)
-        .map_err(|source| ManifestError::Yaml { path: path.to_path_buf(), source })?;
+    let text = std::fs::read_to_string(path).map_err(|source| ManifestError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let raw: RawCase = serde_yaml::from_str(&text).map_err(|source| ManifestError::Yaml {
+        path: path.to_path_buf(),
+        source,
+    })?;
 
     if raw.id.trim().is_empty() {
-        return Err(ManifestError::EmptyId { path: path.to_path_buf() });
+        return Err(ManifestError::EmptyId {
+            path: path.to_path_buf(),
+        });
     }
 
     Ok(Case {
