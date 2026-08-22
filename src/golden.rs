@@ -7,9 +7,23 @@
 //! constant and cancels out. It therefore guards every entailment in
 //! the closure, not only the ones somebody thought to assert.
 //!
-//! The header pins the reasoner version. A version change legitimately
-//! moves the closure, so it is reported as "re-baseline required"
-//! rather than as drift or as a pass.
+//! The header pins the reasoner version AND the completeness flag
+//! (see below). Either changing legitimately moves the closure, so
+//! both are reported as "re-baseline required" rather than as drift
+//! or as a pass: the "same oracle, held constant, cancels out"
+//! argument holds only while the oracle's strength is itself
+//! constant, and a version bump is not the only thing that can change
+//! it (a flag flip from `completeness_guaranteed=true` to `false`, for
+//! example, is a genuine weakening of the oracle even at a fixed
+//! version).
+//!
+//! A MISSING golden file is never silently written except when
+//! `--accept-golden` is passed explicitly. Falling back to "write it
+//! and pass" on a merely-absent file would make a wrong path, or a
+//! checkout missing `suites/`, silently disable the harness's primary
+//! defence and still exit 0: the exact "green while testing nothing"
+//! failure `tests/mutation.rs`'s module doc exists to rule out,
+//! reintroduced in the backstop meant to catch it. See `check_golden`.
 //!
 //! The closure is built from a SINGLE `owl_dl_reasoner::classify` call.
 //! `Classification` precomputes the full pairwise entailment matrix, so
@@ -24,7 +38,10 @@
 //! because a golden file that reports only what was decided implies
 //! more certainty than the run actually had, and drift in the
 //! undecided set is itself meaningful: it means the oracle's reach
-//! changed.
+//! changed. The completeness flag is not just recorded, it is
+//! COMPARED (see `check_golden`): recording a certainty signal and
+//! then ignoring it when checking for drift would reproduce the same
+//! silence one level up.
 //!
 //! The closure also records the named property hierarchy
 //! (`classify_object_property_hierarchy` /
@@ -36,18 +53,50 @@
 //! (`mutants/no-subproperty-containment.ttl`) leaves the named-class
 //! subsumption matrix byte-identical, since none of those four
 //! properties appears in any class-defining restriction in SULO; the
-//! drift is visible only in the property hierarchy. Verified
-//! empirically before adding this: with only the class hierarchy, all
-//! four checked-in mutants left `closure` byte-identical to clean
-//! SULO, which would have made the golden diff blind to every
-//! regression the mutation suite actually exercises. Since the golden
-//! file's entire justification is guarding every entailment the
-//! oracle can report, not only the ones a class query happens to
-//! touch, the property hierarchy belongs in the closure alongside the
-//! class hierarchy.
+//! drift is visible only in the property hierarchy.
+//!
+//! # What this closure can and cannot see (state the number, do not oversell it)
+//!
+//! The closure's sensitivity surface is exactly: named class
+//! subsumption, named class satisfiability, named class equivalence,
+//! named object/data property subsumption and equivalence, and the
+//! undecided-pair set. It is structurally BLIND to: property
+//! characteristics (transitive, reflexive, functional, ...), property
+//! chains (`owl:propertyChainAxiom`), domains and ranges, class and
+//! property disjointness, covering axioms (`owl:disjointUnionOf`), and
+//! every ABox-level entailment (instances, property values). None of
+//! those participate in `Classification`'s class matrix or in
+//! `classify_object_property_hierarchy`/`classify_data_property_hierarchy`'s
+//! materialised edges.
+//!
+//! Measured directly against this repository's four checked-in
+//! mutants (`mutants/README.md`): this closure catches exactly ONE of
+//! four. `no-subproperty-containment.ttl` is caught, via the property
+//! hierarchy above. `no-role-chain.ttl` is NOT caught:
+//! `materialize_subobjectproperty_axioms` explicitly skips a chain
+//! sub-expression, so a lost `owl:propertyChainAxiom` never reaches
+//! either hierarchy this closure reads. `no-transitive-parthood.ttl`
+//! is NOT caught: `owl:TransitiveProperty` is not a component kind
+//! either hierarchy matches, and removing it moves neither the class
+//! matrix nor the property edges. `no-feature-union.ttl` is NOT
+//! caught: it removes a `disjointUnionOf` covering axiom, but the four
+//! `rdfs:subClassOf sulo:Feature` edges it would otherwise imply are
+//! ALSO asserted directly elsewhere in SULO, and pairwise disjointness
+//! among the four survives in the redundant `owl:AllDisjointClasses`
+//! axiom, so nothing in the class matrix moves either. The other
+//! three mutants are caught by `tests/mutation.rs`'s case-based suite,
+//! a different, complementary defence layer; this golden closure does
+//! not duplicate that coverage and is not a substitute for it.
+//!
+//! DEFERRED (not built here): three of spec 5.2's five closure
+//! components, inferred class assertions, inferred property
+//! assertions, and inferred disjointness, are absent. That is where
+//! the other three mutants live. Closing that gap needs a fixed probe
+//! ABox, since `sulo.ttl` itself declares no individuals; that is a
+//! subsystem, not a fix, and belongs in the follow-on plan.
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use horned_owl::model::RcStr;
 use horned_owl::ontology::set::SetOntology;
@@ -55,10 +104,14 @@ use horned_owl::ontology::set::SetOntology;
 /// The reasoner version this closure was produced with.
 pub const REASONER_VERSION: &str = "rustdl v0.4.22";
 
-/// The reasoner version pinned in a golden file's header.
-#[derive(Debug, PartialEq, Eq)]
+/// A golden file's parsed header: the reasoner version it was
+/// produced with, and whether that run's completeness was guaranteed.
+/// Both fields are compared in `check_golden`; either changing is
+/// treated as re-baseline required, not as drift and not as a pass.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GoldenHeader {
     pub reasoner_version: String,
+    pub completeness_guaranteed: bool,
 }
 
 /// Outcome of comparing a closure to its golden file.
@@ -68,6 +121,15 @@ pub enum GoldenOutcome {
     Drift(String),
     Rebaselined,
     RebaselineRequired(String),
+    /// A harness or IO failure: the closure could not be computed, the
+    /// golden file could not be read or written, or (with `accept`
+    /// false) no golden file exists at all. Never a verdict about the
+    /// ontology's entailments, so it must never be conflated with
+    /// `Drift`: an unreadable file or a reasoner error is not a
+    /// regression, and reporting it as one trains an operator to
+    /// reach for `--accept-golden`, which is exactly the wrong reflex
+    /// for a permissions problem or an inconsistent ontology.
+    Error(String),
 }
 
 /// Serialise the full inferred closure, sorted and canonical.
@@ -78,6 +140,23 @@ pub enum GoldenOutcome {
 /// `completeness_guaranteed`) is a cheap read of that matrix, not a
 /// fresh reasoning call.
 pub fn closure(onto: &SetOntology<RcStr>) -> Result<String, String> {
+    // `classify` is called with NO timeout and NO global deadline: it
+    // is fully unbounded. The 24-minute-hang precedent in `oracle.rs`
+    // therefore applies in principle to this call too, though nothing
+    // in real SULO's 17 named classes has yet approached it (a full
+    // run here takes well under a second). Bounding it later with
+    // `classify_with_timeout` or `classify_with_global_deadline` would
+    // make `undecided_pairs` non-empty in a wall-clock-dependent way,
+    // and therefore make the `undecided` lines in this closure flaky
+    // (the same run could report a different undecided set depending
+    // on machine load), which is a real cost against a real safety
+    // benefit; that trade-off is deliberately not made here, and
+    // should be made explicitly, not rediscovered, if this ever times
+    // out on a future SULO revision. Consequence of staying unbounded:
+    // `undecided_pairs` is inert today, always empty, because nothing
+    // ever times out. It is kept anyway: it is honest (it will start
+    // reporting the moment a bound is ever introduced) and it costs
+    // nothing while empty.
     let classification = owl_dl_reasoner::classify(onto).map_err(|e| e.to_string())?;
 
     let unsatisfiable: BTreeSet<&str> =
@@ -112,6 +191,8 @@ pub fn closure(onto: &SetOntology<RcStr>) -> Result<String, String> {
     // What the oracle could not decide. Recorded in the body (so it
     // is sorted like everything else, and so drift in the undecided
     // set is caught the same way drift in a decided entailment is).
+    // See the comment on the `classify` call above: always empty
+    // today, since `classify` is unbounded here.
     for (sub, sup) in classification.undecided_pairs() {
         lines.insert(format!("undecided\t{sub}\t{sup}"));
     }
@@ -185,45 +266,99 @@ pub fn diff(current: &str, golden: &str) -> Option<String> {
     Some(out)
 }
 
-fn golden_reasoner_version(text: &str) -> Option<String> {
-    text.lines()
-        .find_map(|l| l.strip_prefix("# reasoner: "))
-        .map(str::to_string)
+/// Parse a closure's two header lines. `None` if either is missing or
+/// malformed: a golden file this cannot parse is never trusted enough
+/// to compare against, so callers treat `None` as re-baseline
+/// required, the same as a genuine version or completeness mismatch.
+fn parse_header(text: &str) -> Option<GoldenHeader> {
+    let reasoner_version = text
+        .lines()
+        .find_map(|l| l.strip_prefix("# reasoner: "))?
+        .to_string();
+    let completeness_guaranteed = text
+        .lines()
+        .find_map(|l| l.strip_prefix("# completeness_guaranteed: "))
+        .and_then(|v| v.parse::<bool>().ok())?;
+    Some(GoldenHeader {
+        reasoner_version,
+        completeness_guaranteed,
+    })
+}
+
+/// Best-effort absolute form of `path`, for error messages only. Falls
+/// back to the given path unchanged if it cannot be resolved (for
+/// example on an exotic filesystem); never fails the caller over a
+/// cosmetic detail in an already-erroring message.
+fn display_path(path: &Path) -> PathBuf {
+    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Compare against the golden file, optionally re-baselining.
+///
+/// With `accept` true, ALWAYS (re)writes the file and returns
+/// `Rebaselined`: this is the one deliberate, explicit way to accept a
+/// new closure. With `accept` false and no file present, this returns
+/// `Error`, never a silent `Rebaselined`: falling back to "write it
+/// and exit 0" on a merely-absent path would let a wrong `--golden`
+/// argument, or a checkout missing `suites/`, silently disable the
+/// harness's primary defence while still reporting success.
 pub fn check_golden(onto: &SetOntology<RcStr>, path: &Path, accept: bool) -> GoldenOutcome {
     let current = match closure(onto) {
         Ok(c) => c,
-        Err(e) => return GoldenOutcome::Drift(format!("could not compute closure: {e}")),
+        Err(e) => return GoldenOutcome::Error(format!("could not compute closure: {e}")),
     };
 
-    if accept || !path.exists() {
-        if let Err(e) = std::fs::write(path, &current) {
-            return GoldenOutcome::Drift(format!("could not write golden file: {e}"));
-        }
-        return GoldenOutcome::Rebaselined;
+    if accept {
+        return match std::fs::write(path, &current) {
+            Ok(()) => GoldenOutcome::Rebaselined,
+            Err(e) => GoldenOutcome::Error(format!("could not write golden file: {e}")),
+        };
+    }
+
+    if !path.exists() {
+        return GoldenOutcome::Error(format!(
+            "no golden file at {}; run with --accept-golden to create one deliberately",
+            display_path(path).display()
+        ));
     }
 
     let golden = match std::fs::read_to_string(path) {
         Ok(g) => g,
-        Err(e) => return GoldenOutcome::Drift(format!("could not read golden file: {e}")),
+        Err(e) => return GoldenOutcome::Error(format!("could not read golden file: {e}")),
     };
 
-    match golden_reasoner_version(&golden) {
-        Some(v) if v != REASONER_VERSION => {
-            return GoldenOutcome::RebaselineRequired(format!(
-                "golden file was produced with {v}, running {REASONER_VERSION}. \
-                 A reasoner change legitimately moves the closure; \
-                 review and re-run with --accept-golden."
-            ));
-        }
+    // `current` was just produced by `closure` above, which always
+    // writes both header lines, so this parse cannot fail.
+    let current_header = parse_header(&current).expect("closure() always writes both header lines");
+
+    let golden_header = match parse_header(&golden) {
+        Some(h) => h,
         None => {
             return GoldenOutcome::RebaselineRequired(
-                "golden file has no reasoner version header".to_string(),
+                "golden file header is missing or malformed (expected '# reasoner: ...' \
+                 and '# completeness_guaranteed: ...' lines)"
+                    .to_string(),
             );
         }
-        Some(_) => {}
+    };
+
+    if golden_header.reasoner_version != current_header.reasoner_version {
+        return GoldenOutcome::RebaselineRequired(format!(
+            "golden file was produced with {}, running {}. \
+             A reasoner change legitimately moves the closure; \
+             review and re-run with --accept-golden.",
+            golden_header.reasoner_version, current_header.reasoner_version
+        ));
+    }
+
+    if golden_header.completeness_guaranteed != current_header.completeness_guaranteed {
+        return GoldenOutcome::RebaselineRequired(format!(
+            "golden file was produced with completeness_guaranteed={}, this run computed \
+             completeness_guaranteed={}. The oracle's completeness changed, a genuine \
+             weakening or strengthening of what was verified even at the same reasoner \
+             version; review and re-run with --accept-golden.",
+            golden_header.completeness_guaranteed, current_header.completeness_guaranteed
+        ));
     }
 
     match diff(&current, &golden) {

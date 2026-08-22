@@ -67,6 +67,10 @@ fn main() -> ExitCode {
                     println!("re-baseline required: {m}");
                     ExitCode::from(4)
                 }
+                GoldenOutcome::Error(m) => {
+                    eprintln!("error: {m}");
+                    ExitCode::from(2)
+                }
             }
         }
     }

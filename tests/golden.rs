@@ -108,7 +108,20 @@ fn check_golden_reports_drift_for_a_real_mutant() {
     assert_eq!(wrote, GoldenOutcome::Rebaselined);
 
     match check_golden(&mutant, &path, false) {
-        GoldenOutcome::Drift(d) => assert!(!d.is_empty(), "drift report should not be empty"),
+        GoldenOutcome::Drift(d) => {
+            assert!(
+                d.contains(
+                    "subObjectPropertyOf\thttps://w3id.org/sulo/hasPart\thttps://w3id.org/sulo/contains"
+                ),
+                "drift should name the lost hasPart -> contains edge: {d}"
+            );
+            assert!(
+                d.contains(
+                    "subObjectPropertyOf\thttps://w3id.org/sulo/isPartOf\thttps://w3id.org/sulo/isIn"
+                ),
+                "drift should name the lost isPartOf -> isIn edge: {d}"
+            );
+        }
         other => panic!("expected Drift against a mutated ontology, got {other:?}"),
     }
 
@@ -121,7 +134,11 @@ fn check_golden_requires_rebaseline_on_reasoner_version_mismatch() {
     // reported as re-baseline required, never as drift and never as a
     // silent pass.
     let path = scratch_golden("version-mismatch");
-    std::fs::write(&path, "# reasoner: rustdl v0.0.1\nsatisfiable\tx\ttrue\n").unwrap();
+    std::fs::write(
+        &path,
+        "# reasoner: rustdl v0.0.1\n# completeness_guaranteed: false\nsatisfiable\tx\ttrue\n",
+    )
+    .unwrap();
 
     let onto = load_file(Path::new(SULO)).unwrap().ontology;
     match check_golden(&onto, &path, false) {
@@ -156,6 +173,86 @@ fn check_golden_requires_rebaseline_when_header_is_missing() {
     );
 
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn check_golden_errors_without_writing_when_no_golden_file_exists_and_accept_is_false() {
+    // Critical fix: a missing golden file must NEVER be silently
+    // written and treated as a pass. That would let a wrong path, or
+    // a checkout missing `suites/`, silently disable the harness's
+    // primary defence while still exiting 0.
+    let path = scratch_golden("missing-file-no-accept");
+    let _ = std::fs::remove_file(&path); // ensure it truly does not exist
+
+    let onto = load_file(Path::new(SULO)).unwrap().ontology;
+    match check_golden(&onto, &path, false) {
+        GoldenOutcome::Error(m) => {
+            assert!(
+                m.contains("--accept-golden"),
+                "message should tell the operator how to create one deliberately: {m}"
+            );
+        }
+        other => panic!("expected Error on a missing golden file, got {other:?}"),
+    }
+
+    assert!(
+        !path.exists(),
+        "a missing golden file must not be written as a side effect of checking it"
+    );
+}
+
+#[test]
+fn check_golden_requires_rebaseline_on_completeness_mismatch() {
+    // Ruling 2's completeness flag is not just recorded, it is
+    // compared: a flip in what the oracle could guarantee is a
+    // genuine change in the oracle's strength, even at a fixed
+    // reasoner version, and must not be silently absorbed into Match.
+    let path = scratch_golden("completeness-mismatch");
+    std::fs::write(
+        &path,
+        format!(
+            "# reasoner: {REASONER_VERSION}
+# completeness_guaranteed: true
+"
+        ),
+    )
+    .unwrap();
+
+    let onto = load_file(Path::new(SULO)).unwrap().ontology;
+    // Real SULO is out-of-fragment, so its actual completeness_guaranteed
+    // is false; the fixture above deliberately claims true, to differ.
+    match check_golden(&onto, &path, false) {
+        GoldenOutcome::RebaselineRequired(m) => {
+            assert!(
+                m.contains("completeness_guaranteed"),
+                "message should name the completeness mismatch: {m}"
+            );
+        }
+        other => panic!("expected RebaselineRequired on a completeness mismatch, got {other:?}"),
+    }
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn the_committed_golden_file_matches_clean_sulo() {
+    // Important fix: nothing in the repository otherwise reads
+    // `suites/sulo.golden`. Without this test the committed artifact
+    // is inert, a stale or wrongly regenerated golden file is
+    // undetectable, and (combined with the missing-file fix above) a
+    // CI job that lost `suites/` would recreate it and pass. This is
+    // the strong form of `the_closure_is_deterministic`: that test
+    // runs two calls in one process against one already-loaded
+    // ontology and so cannot see load-path or cross-process
+    // variation; this test goes through the real committed file on
+    // disk, the same path an operator's `cargo run -- golden` takes.
+    let onto = load_file(Path::new(SULO)).unwrap().ontology;
+    let outcome = check_golden(&onto, Path::new("suites/sulo.golden"), false);
+    assert_eq!(
+        outcome,
+        GoldenOutcome::Match,
+        "the committed suites/sulo.golden must match current SULO's closure;          if SULO changed deliberately, regenerate it with --accept-golden"
+    );
 }
 
 #[test]
