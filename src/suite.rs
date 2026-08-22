@@ -71,7 +71,7 @@ pub struct CaseResult {
 /// are left untouched: each rests on a clash or entailment actually
 /// found, which loss (a strict subset of the intended axioms) cannot
 /// manufacture out of nothing.
-pub fn downgrade_for_loss(outcomes: &mut Vec<CheckOutcome>, loss: &[String]) {
+pub fn downgrade_for_loss(outcomes: &mut [CheckOutcome], loss: &[String]) {
     if loss.is_empty() {
         return;
     }

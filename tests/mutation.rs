@@ -204,11 +204,15 @@ fn expected_no_subproperty_containment(sulo: &str) -> String {
     out.replacen(needle_contains, "    owl:inverseOf sulo:isPartOf .", 1)
 }
 
+/// (mutant file name, function that derives its expected content from
+/// current SULO).
+type StalenessCase = (&'static str, fn(&str) -> String);
+
 #[test]
 fn mutants_are_not_stale_against_current_sulo() {
     let sulo = std::fs::read_to_string(CLEAN).expect("real SULO should be readable");
 
-    let cases: [(&str, fn(&str) -> String); 4] = [
+    let cases: [StalenessCase; 4] = [
         ("no-role-chain.ttl", expected_no_role_chain),
         (
             "no-transitive-parthood.ttl",

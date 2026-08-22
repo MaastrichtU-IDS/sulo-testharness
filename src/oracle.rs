@@ -48,6 +48,7 @@
 //!     `(subject, property, lexical)` (the fast path compares
 //!     datatype IRIs as plain strings, so `"5"^^xsd:int` vs
 //!     `"5"^^xsd:integer` would wrongly miss).
+//!
 //!   A plain miss outside those cases is `Ok(false)`, not a fallback
 //!   call: `inferred_data_property_values` is a pure structural
 //!   passthrough over asserted triples (not tableau search), so an
