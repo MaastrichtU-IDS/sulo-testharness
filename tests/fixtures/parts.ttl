@@ -1,7 +1,19 @@
 @prefix sulo: <https://w3id.org/sulo/> .
 @prefix ex:   <http://example.org/> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
 
 ex:a sulo:isPartOf ex:b .
 ex:b sulo:isPartOf ex:c .
 ex:d a sulo:SpatialObject .
 ex:m sulo:hasValue "hello" .
+ex:n sulo:hasValue "bonjour"@fr .
+ex:o sulo:hasValue "5"^^xsd:int .
+
+ex:Foo a owl:Class .
+ex:Bar a owl:Class .
+ex:Foo owl:equivalentClass ex:Bar .
+
+ex:Bad a owl:Class .
+ex:Bad rdfs:subClassOf sulo:Process, sulo:Object .
