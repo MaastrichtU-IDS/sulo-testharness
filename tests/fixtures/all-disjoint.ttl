@@ -1,0 +1,11 @@
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix ex:  <http://example.org/> .
+
+<http://example.org/onto> a owl:Ontology .
+
+ex:A a owl:Class .
+ex:B a owl:Class .
+ex:C a owl:Class .
+
+[] a owl:AllDisjointClasses ;
+   owl:members ( ex:A ex:B ex:C ) .
