@@ -199,17 +199,44 @@ longer triggered by the `incomplete` flag, so it should be rare and stays red.
 ### 5.2 Golden closure diff
 
 The primary defence for the untrusted direction, and the reason the design does
-not need a complete reasoner to catch drift. The harness serialises the full
-inferred closure into a canonical, sorted golden file: the class hierarchy,
-inferred class assertions, inferred property assertions, per-class
-satisfiability, and inferred disjointness. Any change is diffed on every run.
+not need a complete reasoner to catch drift. The harness serialises the inferred
+closure into a canonical, sorted golden file. Any change is diffed on every run.
 
 This works precisely because it does not care about completeness. Both sides of
 the diff come from the same oracle at the same version, so whatever rustdl cannot
 see is held constant and cancels out. A regression harness needs to detect that
-*the answer changed*, not to know absolute truth, and a golden diff delivers that
-for every entailment in the closure rather than only the ones somebody thought to
-assert.
+*the answer changed*, not to know absolute truth.
+
+**What the golden diff actually covers, corrected after building it.** An earlier
+revision of this section claimed the diff "delivers that for every entailment in
+the closure rather than only the ones somebody thought to assert". That was false,
+and measuring it was the most useful thing the implementation produced.
+
+Shipped sensitivity surface: named class subsumption, per-class satisfiability,
+named class equivalence, named object and data property subsumption and
+equivalence, and the undecided-pair set.
+
+Structurally blind to: property characteristics (transitivity, reflexivity,
+functionality), property chains, domains and ranges, disjointness, disjoint-union
+covering, and every ABox-level entailment.
+
+The consequence, measured against the four mutants in `mutants/`: the golden diff
+detects **one of four**. `no-subproperty-containment` moves the property
+hierarchy and is caught. `no-role-chain` is invisible because the reasoner's
+subproperty materialisation explicitly skips a chain sub-expression.
+`no-transitive-parthood` is invisible because `TransitiveObjectProperty` is not a
+materialised component kind and the class matrix is unmoved. `no-feature-union` is
+invisible because it removes only the covering half, while the four
+`subClassOf Feature` edges are asserted separately and pairwise disjointness
+survives in the redundant `AllDisjointClasses`.
+
+Three of the five components this section originally listed are therefore still
+absent: inferred class assertions, inferred property assertions, and inferred
+disjointness. They are exactly where the other three mutants live. Closing that
+needs a fixed probe ABox, since `sulo.ttl` declares no individuals, so it is a
+subsystem rather than a fix and belongs to the follow-on plan. Until it lands,
+the hand-written assertions and the mutation suite carry the load, and this
+section states the gap rather than implying coverage that does not exist.
 
 The golden file header records the rustdl version. A version mismatch is a
 distinct outcome, "re-baseline required", never a silent pass and never a Fail.
