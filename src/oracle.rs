@@ -19,7 +19,7 @@
 //!   `subject == object` self-loop case for object properties, but
 //!   applied the SAME unbounded call, unguarded, to every data
 //!   fallback (every language-tagged literal, every negative data
-//!   claim, every datatype-IRI mismatch, every TBox-only value) —
+//!   claim, every datatype-IRI mismatch, every TBox-only value):
 //!   `subject == object` is unsatisfiable for a data property whose
 //!   object is a literal, so that guard was never coherent there and
 //!   the hang was still live, just relocated.
@@ -27,12 +27,12 @@
 //!   The current design instead avoids the unbounded call
 //!   (`class_expression_instances`, which internally runs
 //!   `instances_of`'s per-individual, per-pair-deadline loop over
-//!   every named individual in the ontology — the actual blow-up
+//!   every named individual in the ontology, the actual blow-up
 //!   site) entirely. Both narrow fallbacks now go through
 //!   `entailed_via_satisfiability_probe`, which reduces "is `subject`
 //!   an instance of `ce`" to the standard OWL equivalence "is
 //!   `{subject} ⊓ ¬ce` UNsatisfiable", answered by a single
-//!   `is_class_satisfiable_with_timeout` call — a real,
+//!   `is_class_satisfiable_with_timeout` call: a real,
 //!   library-enforced, cooperatively-checked deadline, not a
 //!   post-hoc measurement. This needs no worker thread (`RcStr` is
 //!   `Rc<str>`, not `Send`, so a watchdog thread was never available
@@ -51,7 +51,7 @@
 //!   A plain miss outside those cases is `Ok(false)`, not a fallback
 //!   call: `inferred_data_property_values` is a pure structural
 //!   passthrough over asserted triples (not tableau search), so an
-//!   exact non-match there is a safe negative — safe because `check`
+//!   exact non-match there is a safe negative: safe because `check`
 //!   never promotes a `false` to a trustworthy `Pass`, only ever to
 //!   `UnrefutedPass` for a negative expectation. Bounding every
 //!   ordinary negative data claim through the reasoner instead would
@@ -78,8 +78,8 @@
 //! arm that does not honour `holds_with_deadline`'s own `deadline`
 //! argument (it always uses `REASONER_DEADLINE`): the environment
 //! variable is process-global and set at most once, so per-call
-//! values are not plumbed through it. Every other arm — the object
-//! and data fallbacks, and `Unsatisfiable` — takes `deadline`
+//! values are not plumbed through it. Every other arm (the object
+//! and data fallbacks, and `Unsatisfiable`) takes `deadline`
 //! directly and honours it exactly.
 //!
 //! `ObjectPropertyValues::incomplete()` (from the object fast path)
@@ -104,7 +104,7 @@
 //!   is resolved entirely by the fast path
 //!   (`inferred_data_property_values` maps `Literal::Simple` to
 //!   `xsd:string` on its own), so it never calls `to_horned_literal`
-//!   at all — reverting the `Simple` branch back to
+//!   at all: reverting the `Simple` branch back to
 //!   `Datatype(xsd:string)` leaves that test green. `to_horned_literal`
 //!   therefore has its own direct unit test below (`tests` module),
 //!   immune to being shadowed by whichever dispatch path happens to
@@ -268,17 +268,17 @@ fn ensure_realize_deadline_set() {
 /// class `Q ≡ ce` on a cloned ontology and ask only its
 /// satisfiability, via `is_class_satisfiable_with_timeout`
 /// (`Ok(None)` on a genuine, cooperatively-checked deadline expiry).
-/// Every class-expression question this module answers — the two
-/// narrow dispatch fallbacks below, and the three Manchester checks
+/// Every class-expression question this module answers, the two
+/// narrow dispatch fallbacks below and the three Manchester checks
 /// (`check_subsumption_expr`, `check_instance_expr`,
-/// `check_satisfiable_expr`) — is reduced to exactly this call, so
+/// `check_satisfiable_expr`), is reduced to exactly this call, so
 /// this is the single place that ever touches
 /// `is_class_satisfiable_with_timeout` and the only place a change to
 /// the probing strategy needs to happen. None of this module calls
 /// the unbounded `class_expression_entailed_subclass`,
 /// `class_expression_instances`, or `class_expression_satisfiable`
 /// (which itself has no deadline parameter at all): those internally
-/// loop or search without a cooperative deadline check — see the
+/// loop or search without a cooperative deadline check; see the
 /// module doc for the 24-minute hang that motivated retiring them.
 fn probe_satisfiable(
     onto: &SetOntology<RcStr>,
@@ -304,7 +304,7 @@ fn probe_satisfiable(
 /// `{subject} ⊓ ¬ce` is UNsatisfiable, so this builds that intersection
 /// and hands it to `probe_satisfiable`. This is what replaces the
 /// unbounded `class_expression_instances` (whose internal
-/// `instances_of` loops over every named individual in the ontology —
+/// `instances_of` loops over every named individual in the ontology;
 /// see the module doc) for the two narrow dispatch fallbacks that
 /// still need a real reasoner call, and is reused as-is by
 /// `check_instance_expr` below: membership of a named individual in a

@@ -240,7 +240,7 @@ fn data_fallback_terminates_with_a_sound_answer_for_a_language_tagged_literal() 
     // making is narrower and still load-bearing: routing to the
     // fallback for this case terminates fast (proving it is no
     // longer the unbounded call that used to hang) and returns a
-    // sound `false` rather than erroring or hanging — sound because
+    // sound `false` rather than erroring or hanging: sound because
     // `check` never promotes an unproven `false` to a trustworthy
     // `Pass`, only ever to `UnrefutedPass` for a negative expectation.
     let onto = parts_ontology();
