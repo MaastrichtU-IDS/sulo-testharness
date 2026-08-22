@@ -26,8 +26,8 @@ unparseable. Every other regression ships silently.
 `sulo.ttl` declares 17 classes, 18 object properties (9 inverse pairs), and 1
 data property. The logic worth guarding is concrete:
 
-**Disjoint unions and disjointness.** Exactly seven axioms, extracted from
-`sulo.ttl` rather than from the paper:
+**Disjoint unions and disjointness.** Nine axioms, extracted from `sulo.ttl`
+rather than from the paper:
 
 - `Feature owl:disjointUnionOf (Capability InformationObject Quality Role)`
 - `Time owl:disjointUnionOf (Duration TimeInstant TimeInterval)`
@@ -36,6 +36,21 @@ data property. The logic worth guarding is concrete:
 - `Time owl:disjointWith Unit`
 - `Collection owl:disjointWith Quantity`
 - `EndTime owl:disjointWith StartTime`
+- `[] a owl:AllDisjointClasses ; owl:members (Capability InformationObject Quality Role)`
+- `[] a owl:AllDisjointClasses ; owl:members (Duration TimeInstant TimeInterval)`
+
+The two `AllDisjointClasses` axioms sit at the end of `sulo.ttl` (lines 374 to
+378) and are logically redundant, since each restates the pairwise disjointness
+already implied by the corresponding `disjointUnionOf`. They matter anyway for
+two reasons. First, **horned-owl 2.0.0 drops them silently**: its RDF reader has
+no `AllDisjointClasses` handling, the orphaned triples land in the
+`IncompleteParse` return, and `horned-convert` discards that without a warning.
+So a naive harness reasons over a strictly weaker ontology than the one that
+ships, and never says so. `load.rs` must therefore check
+`IncompleteParse::is_complete()` and treat leftovers exactly like rustdl's
+`dropped_axioms`. Second, their redundancy changes what a mutation proves: with
+them present, deleting a `disjointUnionOf` leaves pairwise disjointness intact,
+so only the covering case should react. See section 10.
 
 Two absences are as important as the presences, and the suite pins both as
 intentional rather than leaving them ambiguous:
@@ -48,6 +63,20 @@ intentional rather than leaving them ambiguous:
 
 **Named subsumptions.** Fifteen asserted named `rdfs:subClassOf` axioms.
 `Process` and `Object` are the only classes directly under `owl:Thing`.
+
+**Subproperty axioms.** Four non-trivial ones, not two, plus two
+`owl:topObjectProperty` declarations that carry no content:
+
+- `isDirectPartOf rdfs:subPropertyOf isPartOf` (line 156)
+- `hasDirectPart rdfs:subPropertyOf hasPart` (line 251)
+- `isPartOf rdfs:subPropertyOf isIn` (line 272)
+- `hasPart rdfs:subPropertyOf contains` (line 363)
+
+The last two are easy to overlook and are doing real work. Verified on a parts
+chain: asserting `a isPartOf b` and `b isPartOf c` yields `a isIn b`, `a isIn c`,
+and `b isIn c`, from these axioms plus `isIn` transitivity. Any competency
+question phrased over `isIn` or `contains` depends on them, so they get their own
+cases and their own mutants.
 
 **Property characteristics**
 
@@ -100,7 +129,7 @@ Out of scope:
   `pathway-extract`). The suite is self-contained.
 
 Noted but deliberately excluded: `syntax_check.yml` globs only `*.ttl` at the
-repository root, so `extensions/sphn25-1.ttl`, all four files in `mapping/`, and
+repository root, so `extensions/sphn25-1.ttl`, the three `.ttl` files in `mapping/`, and
 the 13 files in `versions/` are never syntax checked. This is a one-line glob
 fix in an existing workflow, unrelated to logical regressions.
 
@@ -110,11 +139,12 @@ fix in an existing workflow, unrelated to logical regressions.
 | --- | --- | --- |
 | Location | Standalone `sulo-testharness` repository, consumed by `AIDAVA-DEV/sulo` CI as a pinned dependency | Mirrors the `horned-owl` / `horned-roundtrip` split; reusable against any SULO-based ontology; keeps the SULO repository lean |
 | Implementation | Rust CLI plus a composite GitHub Action | No JVM, no interpreter, hermetic; dogfoods `rustdl` on a real ontology; consumer CI needs no toolchain |
-| Reasoning | `owl-dl-reasoner` (rustdl) as an in-process library | Sound SROIQ(D); covers every construct SULO uses |
+| Reasoning | `owl-dl-reasoner` (rustdl) as an in-process library | Sound SROIQ(D). Covers most of what SULO uses, with two measured exceptions: the covering half of `DisjointUnion` and data-range `allValuesFrom`. Both are handled, see sections 6.1 and 9 |
 | Parsing | `horned-owl` 2.0.0 | Its RDF reader is parameterised over `oxrdfio::RdfFormat`, so Turtle is read directly with no conversion step |
 | SPARQL | `oxigraph` in-memory store | Competency questions run over asserted plus materialised triples |
 | Test declaration | YAML manifest plus sidecar `.ttl` and `.rq` files | Greppable, diff-friendly, adaptable by a non-programmer; no RDF ceremony for scaffolding |
 | Verdict architecture | Typed claims dispatched to reasoner queries, separate CQ path | Keeps the entailment oracle a real reasoner rather than a triple dump |
+| Untrusted direction | Golden closure diff as the default gate, plus a HermiT differential in CI | A sound-but-incomplete reasoner cannot certify a non-entailment. The golden diff is incompleteness-invariant and JVM-free; HermiT is complete and settles what the diff cannot. See section 5 |
 | Suite home | `suites/sulo/` inside the harness repository | The mutation tests need the suite and the engine together; the Action takes a `--tests` path, so relocating later is configuration, not a rewrite |
 
 Deferred: the git remote. Development happens at `~/code/sulo-testharness` with
@@ -132,25 +162,84 @@ can be trusted:
 | test expects entailed | PASS, trustworthy by soundness | suspect: a real regression, or an incompleteness artifact |
 | test expects not entailed | FAIL, trustworthy by soundness | suspect: a genuine regression could hide here |
 
-Two verdicts cannot express this, so the harness has three: **Pass**, **Fail**,
-and **Indeterminate**. Indeterminate carries its reason: the reasoner set
-`incomplete`, the query timed out, or a dropped axiom could affect the result.
-Collapsing Indeterminate into Pass or Fail is how a test harness starts lying.
+The table is correct, but an earlier draft of this spec drew the wrong conclusion
+from it. It proposed routing every `incomplete` query to an Indeterminate
+verdict, on the premise that "SULO sits comfortably inside the tractable
+fragment, so Indeterminate should be empty in practice."
 
-SULO is 17 classes and sits comfortably inside the tractable fragment, so
-Indeterminate should be empty in practice. That is exactly why it must be loud
-when it is not: Indeterminate is red by default (exit 3), with
-`--allow-indeterminate` to downgrade it to a warning.
+**That premise is false, and it was measured.** SULO uses `disjointUnionOf`,
+`complementOf`, and `allValuesFrom` over unions, all outside EL and Horn.
+`incomplete: true` comes back on essentially every non-EL query, including both
+covering checks in section 9 and every `subclass-expr` against plain `sulo.ttl`.
+Under the discarded rule, every negative test lands Indeterminate, the suite
+exits 3 on every run, and the first thing any maintainer does is set
+`--allow-indeterminate` permanently, switching off exactly the checks the flag
+existed to protect. `rustdl consistent` also exposes no `incomplete` field at
+all, so the consistency gate could not have applied the rule even in principle.
 
-Exit codes:
+So `incomplete` is **not** a verdict input. It is a blanket per-query property of
+the path the reasoner took, not a statement about this answer. The untrusted
+direction is handled by two mechanisms instead, and the harness's honesty rests
+on them rather than on a flag.
 
-- `0` all checks pass
+### 5.1 Verdicts for hand-written assertions
+
+- Positive expectation, entailed: **Pass**. Trustworthy by soundness.
+- Negative expectation, entailed: **Fail**. Trustworthy by soundness.
+- Positive expectation, not entailed: **Fail**. Reported with the caveat that
+  incompleteness is a possible cause; the CI differential (5.3) resolves which.
+- Negative expectation, not entailed: **Pass (unrefuted)**. Counted and reported
+  separately from verified Passes, because absence of a proof is not proof of
+  absence. It does not fail the build on its own.
+
+**Indeterminate** is reserved for genuine non-answers: a timeout, or a dropped
+axiom or incomplete parse that could bear on this specific query. It is no
+longer triggered by the `incomplete` flag, so it should be rare and stays red.
+
+### 5.2 Golden closure diff
+
+The primary defence for the untrusted direction, and the reason the design does
+not need a complete reasoner to catch drift. The harness serialises the full
+inferred closure into a canonical, sorted golden file: the class hierarchy,
+inferred class assertions, inferred property assertions, per-class
+satisfiability, and inferred disjointness. Any change is diffed on every run.
+
+This works precisely because it does not care about completeness. Both sides of
+the diff come from the same oracle at the same version, so whatever rustdl cannot
+see is held constant and cancels out. A regression harness needs to detect that
+*the answer changed*, not to know absolute truth, and a golden diff delivers that
+for every entailment in the closure rather than only the ones somebody thought to
+assert.
+
+The golden file header records the rustdl version. A version mismatch is a
+distinct outcome, "re-baseline required", never a silent pass and never a Fail.
+Re-baselining is explicit: `--accept-golden`.
+
+### 5.3 HermiT differential in CI
+
+HermiT is complete for OWL 2 DL, so it is the oracle of record for exactly the
+answers soundness cannot vouch for. A CI-only job cross-checks every negative
+assertion and every consistency verdict against HermiT via the existing ROBOT
+setup. This also covers the two gaps rustdl provably cannot see today: the
+covering half of `DisjointUnion` (section 6.1) and data-range `allValuesFrom`.
+
+Disagreement between the two reasoners is its own verdict, **Divergence**, and it
+is always loud. It does not mean SULO regressed; it means one of the two
+reasoners is wrong, which is the most valuable signal either could produce.
+
+The JVM stays out of the default and local path. It is a CI job only.
+
+### 5.4 Exit codes
+
+- `0` all checks pass (unrefuted Passes reported in the summary)
 - `1` any Fail
 - `2` harness or configuration error (bad YAML, missing file, parse failure)
 - `3` any Indeterminate, unless `--allow-indeterminate`
+- `4` golden closure drift, or re-baseline required
+- `5` oracle divergence between rustdl and HermiT
 
 Check verdicts aggregate worst-first within a case: Fail beats Indeterminate
-beats Pass.
+beats unrefuted Pass beats Pass.
 
 ## 6. Architecture
 
@@ -189,11 +278,21 @@ something a reasoner can actually be asked. It parses the fragment with
 | `:C owl:equivalentClass :D` | Equivalence | `is_subclass` both directions |
 | `:C rdfs:subClassOf owl:Nothing` | Unsatisfiable | satisfiability |
 | `:x a :C` | ClassAssertion | `instances` (see note) |
-| `:x :p :y`, `:p` an object property | PropertyAssertion | `property-values` |
-| `:x :p "lit"`, `:p` a data property | DataPropertyAssertion | `property-values` |
+| `:x :p :y`, `:p` an object property | PropertyAssertion | `instances-expr "p value :y"`, membership of `:x` |
+| `:x :p "lit"`, `:p` a data property | DataPropertyAssertion | `instances-expr "p value lit"` |
 
 A statement matching no row is a configuration error (exit 2), never a silent
 skip.
+
+**Note on PropertyAssertion.** It must go through an entailment check, not
+through enumeration. Verified: `property-values` returns the transitive closure
+and the subproperty propagation but emits **no reflexive self-loops**, so an
+`entails: ex:d sulo:isPartOf ex:d` case dispatched to it fails spuriously on
+healthy SULO even though `isPartOf` is declared reflexive. The entailment is
+genuinely there: `instances-expr "(<isPartOf> value <ex:d>)"` returns `ex:d`.
+`property-values` is therefore reserved for CQ materialisation (section 8 step
+6), where the same gap means reflexive self-loops must be injected separately or
+a CQ pattern `?x sulo:isPartOf ?x` silently returns nothing.
 
 **Note on ClassAssertion.** It must be backed by `instances`, not by `realize`.
 Verified during design: `realize` reports only the most specific type, so for the
@@ -201,6 +300,34 @@ SOLID example it returns `alice_temp_1 a Quantity` and nothing else, whereas
 `instances` returns the full closure and correctly lists `alice_temp_1` under
 `Quantity`, `InformationObject`, `Feature`, and `Object`. Backing the claim with
 `realize` would make every non-most-specific class assertion fail spuriously.
+
+**Note on DisjointUnion, and a required pre-lowering step.** rustdl does not
+enforce the **covering** half of `DisjointUnion` in the ABox path. Verified: a
+`Feature` individual asserted to be none of `Capability`, `InformationObject`,
+`Quality`, or `Role` is reported `consistent`, with all five
+`ObjectComplementOf` assertions and both `DisjointUnion` axioms intact in the
+converted OFN. The disjointness half is enforced correctly; only the covering
+half is lost, and it is lost silently, with no `dropped_axioms` entry and no
+`incomplete` flag.
+
+Two consequences the design must respect:
+
+1. **Covering is checked as an entailment, never as a consistency probe.**
+   Verified working: `subclass-expr Feature "(Capability or InformationObject or
+   Quality or Role)"` returns `entailed: true` on clean SULO, and the deliberate
+   non-covering `subclass-expr Object "(SpatialObject or Feature)"` returns
+   `entailed: false`. An earlier draft specified both as `expect_inconsistent`
+   cases, which would have hard-failed on healthy SULO for the covering pair and
+   been silently vacuous for the non-covering pair.
+2. **`load.rs` pre-lowers every `DisjointUnion(C, D1..Dn)`** to
+   `EquivalentClasses(C, ObjectUnionOf(D1..Dn))` plus `DisjointClasses(D1..Dn)`
+   before handing the ontology to the reasoner, which restores the missing
+   covering behaviour in the ABox path as well. This is a workaround for a
+   reasoner bug and is labelled as one in the code, with a link to the filed
+   rustdl issue, so it can be removed when fixed.
+
+Note also that the Manchester parser requires full `<IRI>` forms or a declared
+prefix map; bare names are rejected. See section 7.
 
 Two manifest fields escape what Turtle can express, and both are needed for
 SULO specifically:
@@ -230,14 +357,21 @@ description: Participation of the role holder is recovered via the PRO role chai
 ontology: sulo.ttl                    # default comes from --ontology
 imports: []                           # extra ontologies to merge
 data: data/pro-encounter.ttl           # string or list
+prefixes:                              # merged over the suite-level defaults
+  ex: http://example.org/
 expect_inconsistent: false             # true flips the consistency gate
 entails: |                             # Turtle fragment
   ex:encounter sulo:hasParticipant ex:alice, ex:drsmith .
 not_entails: |
   ex:alice sulo:hasParticipant ex:encounter .
-entails_manchester:
-  - { expr: "Process and hasParticipant some (Role and isFeatureOf some Object)",
-      subclass_of: "Process" }
+instance_of_expr:                      # individual is in a class expression
+  - { individual: "ex:encounter",
+      expr: "Process and hasParticipant some (Role and isFeatureOf some Object)" }
+satisfiable_expr:                      # expression must have a model
+  - "Process and hasParticipant some (Role and isFeatureOf some Object)"
+entails_manchester:                    # sub_expr must be subsumed by sup_expr
+  - { sub_expr: "Feature",
+      sup_expr: "Capability or InformationObject or Quality or Role" }
 unsatisfiable: []                      # classes required to be unsatisfiable
 cq:
   - query: queries/who-participated.rq
@@ -247,6 +381,61 @@ cq:
 tags: [pattern, pro]
 timeout_ms: 30000
 ```
+
+### 7.1 Why `entails_manchester` changed shape
+
+An earlier draft's canonical example was
+`{expr: "Process and hasParticipant some (Role and isFeatureOf some Object)",
+subclass_of: "Process"}`. That asserts `C ⊓ D ⊑ C`, a tautology: verified
+`entailed: true` against a declarations-only ontology carrying none of SULO's
+axioms. Any implementer copying the schema's own example would have shipped a
+case that cannot fail.
+
+The field is now a two-expression subsumption (`sub_expr`, `sup_expr`), which is
+what the covering checks need. Testing the PRO pattern properly needs a
+different question, so two fields exist for it: `instance_of_expr` asks whether a
+named individual falls in the pattern expression, which exercises the chain and
+the typing together, and `satisfiable_expr` guards against the pattern becoming
+unsatisfiable.
+
+### 7.2 Prefix resolution
+
+Every Turtle fragment, Manchester expression, and `expect_rows` value resolves
+CURIEs against one prefix map, assembled in this order, later winning:
+
+1. `sulo:` bound to `https://w3id.org/sulo/`, and the standard `rdf:`, `rdfs:`,
+   `owl:`, `xsd:`, `skos:` bindings, always injected.
+2. A suite-level `prefixes.yaml`, holding the shared bindings (`ex:`, `obo:`).
+3. The case's own `prefixes:` block.
+
+Turtle fragments are parsed with this map prepended as `@prefix` lines, so
+authors never declare prefixes inline. Manchester expressions are rewritten to
+full `<IRI>` form before reaching rustdl, whose parser rejects bare names and
+undeclared prefixes. An unresolvable CURIE anywhere is a configuration error
+(exit 2), never a failed check.
+
+### 7.3 `expect_rows` comparison semantics
+
+Undefined comparison rules were the largest ambiguity in the earlier draft. The
+rules are:
+
+- A value is compared by RDF term, not by string. Each expected value is parsed
+  into a term first: `ex:alice` becomes an IRI via the prefix map, `<http://...>`
+  an IRI, `"37.8"^^xsd:double` a typed literal, `"text"@en` a language literal,
+  and a bare `"37.8"` an `xsd:string` literal.
+- Literal equality is RDF term equality, so `"37.8"` does **not** equal
+  `"37.8"^^xsd:double`. Authors must write the datatype they expect. This is
+  deliberate: value-space equality would hide serialisation regressions, which is
+  a thing the harness exists to catch.
+- Rows are compared as a multiset, so duplicate rows are significant. `ordered:
+  true` compares as a sequence instead, and is only valid with an `ORDER BY` in
+  the query.
+- `exact: true` requires set equality. `exact: false` requires every expected row
+  to be present, extra rows allowed. Never the reverse.
+- A variable expected to be unbound is written `null`. A row whose variable is
+  unbound in the result matches only `null`.
+- Blank nodes never compare equal across runs and are a configuration error in
+  `expect_rows`. Suite data uses skolemised IRIs instead (section 9).
 
 ## 8. Execution pipeline
 
@@ -262,20 +451,40 @@ Per case:
    check would fail for a reason unrelated to what it tests.
    - `expect_inconsistent: true` and inconsistent: the case passes, and all
      remaining checks are **skipped, not passed**.
-   - `expect_inconsistent: true` and consistent: **Fail**. This is the
-     axiom-stopped-biting regression, and it is the entire point of these cases.
+   - `expect_inconsistent: true` and consistent: **Fail**, caveated. This is the
+     axiom-stopped-biting regression and the entire point of these cases, but
+     "consistent" is exactly the direction soundness does not vouch for, and
+     `rustdl consistent` exposes no `incomplete` flag to condition on. So the
+     Fail is reported with its caveat and routed to the CI differential (5.3),
+     where HermiT settles it. A dropped axiom or incomplete parse downgrades it
+     to Indeterminate instead, per section 12.
    - expecting consistent and inconsistent: **Fail** the case, skip the rest,
      and report the clashing axioms via `justify`.
 4. **Positive entailments** dispatched per the claim table.
 5. **Negative entailments**, the same queries with inverted expectations.
-6. **Competency questions.** Materialise inferred axioms, merge asserted plus
-   inferred triples into an in-memory oxigraph store, run the SPARQL, compare
-   bindings as a multiset (ordered comparison when `ordered: true`).
-7. **Aggregate** verdicts worst-first.
+6. **Competency questions.** Build the store, then query. "Materialise" is
+   defined concretely, because leaving it vague would let two implementers build
+   stores with different contents and the same CQ pass on one and fail on the
+   other. The store contains exactly:
+   - every asserted triple from the ontology and data files,
+   - every inferred class assertion, from `instances` over all 17 named classes
+     (the full closure, not most-specific types),
+   - every inferred object and data property assertion, from `property-values`,
+   - plus, injected separately, the reflexive self-loops `x isPartOf x` and
+     `x hasPart x` for every named individual, which `property-values` omits
+     (section 6.1). Without this a CQ pattern `?x sulo:isPartOf ?x` silently
+     returns nothing despite the axiom.
+
+   Named individuals only. Blank nodes are outside `property-values` coverage, so
+   suite data uses skolemised IRIs. Then run the SPARQL and compare per section
+   7.3.
+7. **Golden closure diff.** Serialise the canonical closure and diff it against
+   the committed golden file (section 5.2). Runs once per ontology, not per case.
+8. **Aggregate** verdicts worst-first.
 
 ## 9. Suite inventory
 
-Roughly 40 cases in four groups, under `suites/sulo/`.
+Roughly 70 cases in six groups, under `suites/sulo/`.
 
 **taxonomy**
 
@@ -289,27 +498,33 @@ Roughly 40 cases in four groups, under `suites/sulo/`.
   6 from the `Feature` disjoint union, 3 from the `Time` disjoint union, and the
   5 plain pairs `Object`/`Process`, `Feature`/`SpatialObject`, `Time`/`Unit`,
   `Collection`/`Quantity`, `EndTime`/`StartTime`
-- the **covering** half of the two disjoint unions, which no disjointness test
-  reaches: a `Feature` asserted to be none of `Capability`, `InformationObject`,
-  `Quality`, or `Role` must be inconsistent, and likewise a `Time` that is none
-  of `Duration`, `TimeInstant`, or `TimeInterval`
-- the two deliberate **non**-coverings, pinned as intentional: an `Object` that
-  is neither `SpatialObject` nor `Feature` must stay **consistent**, and an
-  `InformationObject` that is neither `Collection` nor `Quantity` must stay
-  consistent. Without these, someone "completing the pattern" by adding a third
-  disjoint union would break downstream data and pass CI.
+- the **covering** half of the two disjoint unions, as `entails_manchester`
+  subsumptions rather than consistency probes (section 6.1):
+  `Feature ⊑ (Capability or InformationObject or Quality or Role)` and
+  `Time ⊑ (Duration or TimeInstant or TimeInterval)`
+- the two deliberate **non**-coverings, pinned as intentional, likewise as
+  non-entailments: `Object ⋢ (SpatialObject or Feature)` and
+  `InformationObject ⋢ (Collection or Quantity)`. Without these, someone
+  "completing the pattern" by adding a third disjoint union would break
+  downstream data and pass CI.
 
 **properties**
 
-- the two subproperty axioms: `isDirectPartOf` under `isPartOf`,
-  `hasDirectPart` under `hasPart`
+- all four non-trivial subproperty axioms: `isDirectPartOf` under `isPartOf`,
+  `hasDirectPart` under `hasPart`, and the two easily-missed ones,
+  `isPartOf` under `isIn` and `hasPart` under `contains`. The latter pair gets
+  entailment cases driven from an asserted `isPartOf` chain, since a CQ phrased
+  over `isIn` or `contains` depends on them entirely.
 - all 9 inverse pairs round-trip: `atTime`/`isTimeOf`,
   `isPrecededBy`/`precedes`, `isReferredToIn`/`refersTo`, `contains`/`isIn`,
   `hasFeature`/`isFeatureOf`, `hasItem`/`isItemIn`,
   `hasParticipant`/`isParticipantIn`, `hasDirectPart`/`isDirectPartOf`,
   `hasPart`/`isPartOf`
-- `isPartOf` and `isIn` transitivity closes over a three-step chain
-- `isPartOf` reflexivity
+- transitivity closes over a three-step chain for all four transitive
+  properties, `isPartOf`, `hasPart`, `isIn`, and `contains`, not just the first
+  two
+- `isPartOf` and `hasPart` reflexivity, checked via `instances-expr` per
+  section 6.1 and not via enumeration
 - `hasValue` functionality, enforced by two distinct literals going inconsistent
 - domain and range axioms as entailed class assertions: `:p hasParticipant :o`
   entails `:p a Process` and `:o a Object`
@@ -318,10 +533,61 @@ Roughly 40 cases in four groups, under `suites/sulo/`.
   well-meaning edit would "fix", and it is what keeps OWL 2 cardinality
   restrictions legal over the property.
 
+**restrictions**
+
+`sulo.ttl` carries 16 class-expression restriction axioms that an earlier draft
+of this spec barely mentioned, leaving them the suite's softest spot: deleting
+any one of them passed everything. The full inventory, extracted from the OFN:
+
+- **5 `hasPart` propagation axioms**, `C ⊑ ∀hasPart.C` for `Object`, `Process`,
+  `SpatialObject`, `Feature`, and `InformationObject`. Each gets an entailment
+  case driving a part of a `C` and requiring the part to be typed `C`. Only
+  `Feature`'s was previously exercised, and only incidentally, via the SOLID
+  unit.
+- **6 object `someValuesFrom` axioms**: `Quantity ⊑ ∃hasPart.Unit`,
+  `Feature ⊑ ∃isFeatureOf.(Object or Process)`, and `TimeInterval`'s four
+  (`∃hasDirectPart.StartTime`, `∃hasDirectPart.EndTime`, `∃hasPart.Duration`,
+  `∃hasPart.Unit`). All checked as `entails_manchester` subsumptions.
+- **1 data `someValuesFrom`**: `Duration ⊑ ∃hasValue.decimal[≥ 0]`. Confirmed
+  enforced: a `Duration` with `-5.0^^xsd:decimal` is correctly inconsistent, so
+  the facet bites and this is testable as a counter-example.
+- **1 data `allValuesFrom` that rustdl cannot enforce**:
+  `TimeInstant ⊑ ∀hasValue.(dateTime ∪ dateTimeStamp)`. A `TimeInstant` with
+  `"hello"^^xsd:string` is reported **consistent**, with no dropped-axiom
+  diagnostic. This is a silent-loss channel, so the case is marked
+  `oracle: hermit` and runs only in the CI differential (5.3).
+
+**Three of the 16 are semantically inert**, and the suite says so rather than
+pretending to test them:
+
+- `Collection ⊑ ∀hasItem.owl:Thing` is a tautology; every value is an
+  `owl:Thing`.
+- `InformationObject ⊑ ∀hasValue.rdfs:Literal` is likewise vacuous.
+- `Object ⊑ ¬∃hasPart.Process` is derivable from `Object ⊑ ∀hasPart.Object`
+  plus `Object disjointWith Process`, so deleting it alone is
+  semantics-preserving.
+
+No test can fail on any of these three, so each is recorded here with a comment
+in the suite explaining why it has no case. That is a deliberate documented
+absence rather than an oversight, and it is worth raising with the SULO authors
+separately as possible cleanup.
+
+**domain and range**
+
+An earlier draft covered `hasParticipant` only. The other 16 object properties
+had no domain or range case, and the PRO case types every individual explicitly
+so it never exercised them either. Now covered: `precedes` and `isPrecededBy`
+(`Process` to `Process`), `atTime` range `Time`, `hasItem` domain `Collection`,
+`isItemIn` range `Collection`, `refersTo` domain `InformationObject`, and the
+union domain and range on `hasFeature` and `isFeatureOf`. Each is an entailed
+class assertion driven from a bare property assertion between untyped
+individuals, plus a violation going inconsistent where the range is disjoint
+from something.
+
 **patterns/pro**
 
-- Figure 7's data verbatim, with the role chain firing to yield
-  `encounter hasParticipant alice, drsmith`
+- Figure 7's data, **faithfully adapted rather than verbatim**, with the role
+  chain firing to yield `encounter hasParticipant alice, drsmith`
 - the chain does not run backwards
 - the Manchester pattern-membership expression
 
@@ -342,10 +608,29 @@ Roughly 40 cases in four groups, under `suites/sulo/`.
 - a second `hasValue` going inconsistent, which is the guarantee the pattern
   relies on
 
-Note: Figure 4 in the paper writes the prefix as `http://w3id.org/sulo/`, but
-the real namespace is `https://w3id.org/sulo/`. The suite uses the correct one,
-and the competency-question tests are what catch that class of typo in
-downstream data.
+### 9.1 Paper errata, and why "verbatim" is impossible
+
+Neither listing can be used as printed. The repairs are enumerated here because
+the suite data must be auditable against the paper, and because the list is
+itself a useful errata report for the SULO authors:
+
+- **Both figures** write the namespace as `http://w3id.org/sulo/`; the real one
+  is `https://w3id.org/sulo/`. The competency-question tests are exactly what
+  catches this class of typo in downstream data.
+- **Figure 7 is not valid Turtle.** Its `@prefix obo:` line has no terminating
+  dot; a stray `.` after the `:encounter` type assertion orphans the following
+  `sulo:hasParticipant` line; and `taxon:` is used but never declared.
+- **Figure 7's stated inference names the wrong subject**, giving
+  `:visit_1 sulo:hasParticipant :alice, :drsmith` where the data defines
+  `:encounter`. The suite uses `:encounter`.
+- **Figure 7's roles are typed only as OMRSE classes** (`OMRSE_00000011`,
+  `OMRSE_00000012`), which are not imported, so nothing makes them `sulo:Role`
+  and the chain cannot fire. The suite types them `sulo:Role` explicitly. This is
+  a substantive repair, not a typo, and arguably the paper's example does not work
+  as printed.
+- **Figure 4 puts the unit and quality in blank nodes.** rustdl's
+  `property-values` covers named individuals only, so blank-node values are
+  invisible to the CQ path. All suite data uses skolemised IRIs.
 
 ## 10. Self-testing by mutation
 
@@ -360,15 +645,50 @@ everything, and each mutant is caught by a **specific named case**.
 | drop `owl:TransitiveProperty` from `isPartOf` | `properties/transitivity-ispartof` |
 | **add** `owl:TransitiveProperty` to `isDirectPartOf` | `properties/non-transitivity-isdirectpartof` |
 | drop `owl:FunctionalProperty` from `hasValue` | `patterns/solid/single-value` |
-| delete the `Feature` `disjointUnionOf` | the 6 `Feature`-sibling counter-examples, and `taxonomy/covering-feature` |
-| weaken `Feature`'s `disjointUnionOf` to a plain `disjointWith` | `taxonomy/covering-feature` alone, since the sibling pairs still clash |
+| delete `Feature`'s `disjointUnionOf` **only** | `taxonomy/covering-feature` alone (see below) |
+| delete `Feature`'s `disjointUnionOf` **and** its `AllDisjointClasses` | `taxonomy/covering-feature` plus the 6 `Feature`-sibling counter-examples |
+| delete `Time`'s `disjointUnionOf` and its `AllDisjointClasses` | `taxonomy/covering-time` plus the 3 `Time`-sibling counter-examples |
 | **add** an `Object owl:disjointUnionOf (SpatialObject Feature)` | `taxonomy/non-covering-object` |
 | delete one `owl:inverseOf` | `properties/inverses` |
-| delete `hasParticipant`'s range | `properties/domains-ranges` |
+| delete `isPartOf rdfs:subPropertyOf isIn` | `properties/subproperty-isin` |
+| delete `hasPart rdfs:subPropertyOf contains` | `properties/subproperty-contains` |
+| delete `Object ⊑ ∀hasPart.Object` | `restrictions/propagation-object` |
+| delete `Quantity ⊑ ∃hasPart.Unit` | `restrictions/somevalues-quantity-unit` |
+| delete the `Duration` decimal facet | `restrictions/duration-nonnegative` |
+| delete `hasParticipant`'s range | `domains-ranges/hasparticipant` |
+| delete `atTime`'s range | `domains-ranges/attime` |
+
+### 10.1 Three mapping errors this table used to contain
+
+Worth recording, because each was wrong for an instructive reason and the
+corrected rows above depend on understanding why.
+
+1. **"Delete `Feature`'s `disjointUnionOf`" was mapped to the 6 sibling
+   counter-examples.** It should not touch them. The redundant
+   `AllDisjointClasses` axiom (section 2) still asserts pairwise disjointness, so
+   the siblings still clash and only the covering case reacts. Under the current
+   toolchain the sibling probes *do* go consistent on this mutant, but only
+   because horned-owl drops `AllDisjointClasses` entirely, so the mapping
+   "worked" by riding a parser bug and would break the moment that bug is fixed
+   or HermiT is asked. Hence the split into two rows: deleting the union alone,
+   and deleting both.
+2. **"Weaken the `disjointUnionOf` to a plain `disjointWith`"** was listed as a
+   distinct mutant, but given the same redundancy it is behaviourally
+   indistinguishable from row 5. Removed.
+3. **"Add an `Object disjointUnionOf`" was uncatchable as originally
+   specified.** With `taxonomy/non-covering-object` written as an
+   `expect_inconsistent` probe, the mutant came back consistent and the case
+   passed, making the mutant uncaught and the case vacuous. It only became
+   catchable once the non-covering checks were respecified as non-entailments
+   (section 6.1). Verified on the mutant:
+   `subclass-expr Object "(SpatialObject or Feature)"` returns `entailed: true`,
+   against `entailed: false` on clean SULO.
 
 A mutant that no case catches is a coverage hole, and is reported as one. This
-is the only evidence that the 40 cases are load-bearing rather than decorative,
-and it doubles as the harness's own regression suite.
+is the only evidence that the cases are load-bearing rather than decorative, and
+it doubles as the harness's own regression suite. The three errors above are also
+the argument for building phase 5 early rather than last: every one of them was
+invisible to review and obvious to a mutant.
 
 ## 11. CI integration
 
@@ -382,13 +702,21 @@ and runs it. Consumer CI in the SULO repository becomes:
   with: { ontology: sulo.ttl }
 ```
 
-**On the existing reasoning job.** `reasoning.yml` downloads the ROBOT 1.9.7 jar
-to run HermiT for a consistency check, which the harness subsumes. Rather than
-delete it immediately, keep it for one release cycle: it becomes a free
-differential oracle on exactly the property most worth cross-checking, and if
-rustdl and HermiT ever disagree about SULO's consistency, that disagreement is
-the most valuable signal either tool could produce. Retire it once they have
-agreed across a few releases.
+**On the existing reasoning job: it stays permanently.** An earlier draft
+proposed keeping `reasoning.yml` for one release cycle and retiring it "once
+rustdl and HermiT have agreed across a few releases." That reasoning was
+backwards. The two reasoners agree on healthy SULO by construction, both report
+it consistent, so agreement across releases is evidence of nothing. They diverge
+exactly when a covering violation or a data-range violation appears, which is
+precisely the regression class rustdl provably cannot see (sections 6.1 and 9).
+Retiring HermiT on the strength of routine agreement would remove the oracle at
+the only moment it would ever have spoken.
+
+So HermiT is promoted from transitional cross-check to the permanent oracle of
+record for the untrusted direction, per 5.3. It runs as a CI-only job, covering
+every negative assertion, every consistency verdict, and the cases marked
+`oracle: hermit` because rustdl cannot enforce them. The JVM stays out of the
+default and local path.
 
 ## 12. Error handling
 
@@ -398,10 +726,28 @@ agreed across a few releases.
   skipped and never reported as test failures.
 - A statement in an `entails` or `not_entails` fragment that matches no row in
   the claim table is a configuration error, not a skipped check.
-- A non-empty `dropped_axioms` from the rustdl conversion raises a suite-level
-  warning naming the dropped axiom kinds, and any positive-entailment Fail in
-  that run is downgraded to Indeterminate, because a dropped axiom is a sound
-  under-approximation and the failure may be an artifact of it.
+- **Axiom loss is detected on both channels.** A non-empty `dropped_axioms` from
+  the rustdl conversion, *and* a non-empty `IncompleteParse` from horned-owl,
+  each raise a suite-level warning naming what was lost. The parse channel is not
+  optional: horned-owl silently drops SULO's two `AllDisjointClasses` axioms
+  today (section 2), and without this check the harness reasons over a weaker
+  ontology than the one that ships and never says so.
+- **The loss downgrade is symmetric.** An earlier draft downgraded only
+  positive-entailment Fails, which fixed half the problem and left the more
+  dangerous half trusted. Reasoning over a subset `O'` of `O` is monotonic:
+  "entailed by `O'`" implies "entailed by `O`", so a positive Pass and a negative
+  Fail stay trustworthy. But "not entailed by `O'`" says nothing about `O`, and
+  that unreliable answer appears in *four* places, not one. On any axiom loss,
+  all four are downgraded to Indeterminate:
+  - a positive-expectation Fail,
+  - a negative-expectation Pass,
+  - an `expect_inconsistent` Fail (inconsistency is a positive entailment of
+    falsehood, so a lost axiom removing the clash is exactly analogous),
+  - a "consistent" verdict from the gate.
+
+  Leaving the last three trusted is how a dropped axiom turns into a green build,
+  and the `DisjointUnion` covering loss in section 6.1 is a live instance of the
+  same class of error occurring inside the reasoner rather than the parser.
 - Query timeouts produce Indeterminate, never Fail. The per-case budget comes
   from `timeout_ms`, defaulting to 30000.
 - An inconsistent ontology where consistency was expected reports the clashing
@@ -424,6 +770,25 @@ against `sulo.ttl` at version 0.2.14:
 | the SOLID example is consistent | `consistent` |
 | `hasValue` functionality bites | a second literal on the same `Quantity`: `inconsistent` |
 
+### 13.1 What the first validation pass missed
+
+The table above tested only the paths that work. A subsequent adversarial review
+tested the paths that do not, and found four problems serious enough to have
+broken phase 1. This is recorded because the lesson generalises: a
+design-validation pass that only confirms its own happy path is not validation.
+
+| Probe | Result |
+| --- | --- |
+| `DisjointUnion` covering enforced in the ABox? | **no.** A `Feature` asserted to be none of its 4 members: `consistent`, with all complements and both union axioms intact in the OFN. Two suite cases would have hard-failed on healthy SULO. |
+| covering as an entailment instead? | works. `Feature ⊑ (Capability or InformationObject or Quality or Role)`: `entailed: true`; the deliberate `Object ⋢ (SpatialObject or Feature)`: `entailed: false` |
+| `property-values` emits reflexive self-loops? | **no.** No `x isPartOf x` for any individual, so the reflexivity case would have failed spuriously. `instances-expr "(isPartOf value ex:d)"` returns `ex:d` correctly. |
+| `incomplete` flag rare on SULO? | **no.** `true` on essentially every non-EL query, including both covering checks. Invalidated the "Indeterminate should be empty" premise the verdict design rested on. |
+| `sulo.ttl` disjointness axiom count | **9, not 7.** Two `AllDisjointClasses` axioms at lines 374 to 378, silently dropped by horned-owl. |
+| non-trivial subproperty axioms | **4, not 2.** `isPartOf ⊑ isIn` and `hasPart ⊑ contains` were missed, and both fire: a parts chain yields `a isIn b`, `a isIn c`, `b isIn c`. |
+| restriction axioms in `sulo.ttl` | **16**, of which the earlier draft covered essentially none. Three are semantically inert (section 9). |
+| data-range `allValuesFrom` enforced? | **no.** A `TimeInstant` with `"hello"^^xsd:string`: `consistent`, no diagnostic. Facets do work: a negative `Duration` decimal is correctly inconsistent. |
+| the `entails_manchester` schema example | a tautology. `C ⊓ D ⊑ C` returns `entailed: true` against a declarations-only ontology. |
+
 **One implementation constraint discovered.** The `rustdl` CLI accepts OFN only,
 with no format flag, so it cannot read `sulo.ttl` directly. This does not affect
 the design, because the harness links `owl-dl-reasoner` as a library and does its
@@ -435,12 +800,25 @@ reintroduce an OFN conversion step and a subprocess boundary.
 
 Six phases, each independently verifiable.
 
-1. Crate skeleton: manifest parsing, loading, consistency gate, reporting. Runs
-   end to end on a two-case suite.
-2. `claim.rs` and `oracle.rs`: positive and negative entailments, the
-   three-verdict lattice.
-3. Competency-question path: materialise, oxigraph, binding comparison.
-4. The SULO suite content, all 40 cases.
-5. Mutants and self-tests.
-6. Release binaries, `action.yml`, and the consumer workflow pull request to
+1. Crate skeleton: manifest parsing with the prefix map (7.2), loading with the
+   `IncompleteParse` check and `DisjointUnion` pre-lowering (6.1), consistency
+   gate, reporting. Runs end to end on a two-case suite. Includes a probe test
+   for the known silent-loss channels, so a future toolchain upgrade that fixes
+   or worsens them is noticed.
+2. `claim.rs` and `oracle.rs`: positive and negative entailments, the verdict
+   scheme of section 5.1.
+3. **Mutants and self-tests, moved up from last.** Three of the original
+   mutation mappings were wrong (10.1) and every one was invisible to review and
+   trivial for a mutant to expose. Building this before the bulk of the suite
+   means each case is proved load-bearing as it is written, rather than the whole
+   suite being audited afterwards.
+4. Golden closure diff (5.2), including the rustdl version pin and
+   `--accept-golden`.
+5. Competency-question path: the materialisation defined in section 8 step 6,
+   oxigraph, and the comparison semantics of 7.3.
+6. The SULO suite content, now roughly 70 cases across taxonomy, properties,
+   restrictions, domain and range, and the two patterns.
+7. HermiT differential job (5.3), covering negative assertions, consistency
+   verdicts, and the `oracle: hermit` cases.
+8. Release binaries, `action.yml`, and the consumer workflow pull request to
    `AIDAVA-DEV/sulo`.
