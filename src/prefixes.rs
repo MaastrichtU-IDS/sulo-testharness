@@ -58,6 +58,11 @@ pub fn expand(pm: &PrefixMapping, token: &str) -> Result<String, PrefixError> {
         return Ok(inner.to_string());
     }
 
+    // If it starts with '<' but doesn't end with '>', it's malformed.
+    if t.starts_with('<') {
+        return Err(PrefixError::Malformed(t.to_string()));
+    }
+
     match pm.expand_curie_string(t) {
         Ok(iri) => Ok(iri),
         Err(_) => {

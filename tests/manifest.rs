@@ -13,6 +13,7 @@ fn parses_a_well_formed_case() {
     assert_eq!(c.tags, vec!["pattern", "pro"]);
     assert_eq!(c.timeout_ms, 30_000, "default timeout");
     assert!(!c.expect_inconsistent, "default is expecting consistency");
+    assert_eq!(c.base_dir, Path::new("tests/fixtures"));
 }
 
 #[test]
