@@ -3,7 +3,8 @@ use std::path::Path;
 use sulo_testharness::claim::parse_ce;
 use sulo_testharness::load::{load_file, merge};
 use sulo_testharness::oracle::{
-    Expectation, check_instance_expr, check_satisfiable_expr, check_subsumption_expr,
+    Expectation, REASONER_DEADLINE, check_instance_expr, check_satisfiable_expr,
+    check_subsumption_expr,
 };
 use sulo_testharness::prefixes::base_mapping;
 use sulo_testharness::verdict::Verdict;
@@ -46,6 +47,7 @@ fn feature_covering_is_entailed() {
         "sulo:Capability or sulo:InformationObject or sulo:Quality or sulo:Role",
         Expectation::Entailed,
         &base_mapping(),
+        REASONER_DEADLINE,
     );
     assert_eq!(
         out.verdict,
@@ -63,6 +65,7 @@ fn object_non_covering_is_not_entailed() {
         "sulo:SpatialObject or sulo:Feature",
         Expectation::NotEntailed,
         &base_mapping(),
+        REASONER_DEADLINE,
     );
     // Object deliberately has no covering axiom.
     assert_eq!(out.verdict, Verdict::UnrefutedPass);
@@ -80,6 +83,7 @@ fn a_tautology_is_entailed_even_without_the_ontology() {
         "sulo:Process",
         Expectation::Entailed,
         &base_mapping(),
+        REASONER_DEADLINE,
     );
     assert_eq!(out.verdict, Verdict::Pass);
 }
@@ -98,6 +102,7 @@ fn instance_of_expr_is_entailed_for_the_pro_pattern() {
         "sulo:Process and sulo:hasParticipant some (sulo:Role and sulo:isFeatureOf some sulo:Object)",
         Expectation::Entailed,
         &base_mapping(),
+        REASONER_DEADLINE,
     );
     assert_eq!(
         out.verdict,
@@ -115,6 +120,7 @@ fn instance_of_expr_is_not_entailed_for_an_unrelated_individual() {
         "sulo:Process and sulo:hasParticipant some (sulo:Role and sulo:isFeatureOf some sulo:Object)",
         Expectation::NotEntailed,
         &base_mapping(),
+        REASONER_DEADLINE,
     );
     assert_eq!(out.verdict, Verdict::UnrefutedPass);
 }
@@ -131,6 +137,7 @@ fn satisfiable_expr_holds_for_the_pro_pattern() {
         "sulo:Process and sulo:hasParticipant some (sulo:Role and sulo:isFeatureOf some sulo:Object)",
         Expectation::Entailed,
         &base_mapping(),
+        REASONER_DEADLINE,
     );
     assert_eq!(
         out.verdict,
@@ -149,6 +156,7 @@ fn satisfiable_expr_fails_for_a_genuinely_unsatisfiable_expression() {
         "sulo:Process and sulo:Object",
         Expectation::Entailed,
         &base_mapping(),
+        REASONER_DEADLINE,
     );
     assert!(
         matches!(out.verdict, Verdict::Fail(_)),

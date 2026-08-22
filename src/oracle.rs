@@ -147,7 +147,7 @@ const PROBE_IRI: &str = "urn:sulo-testharness:probe:q";
 /// into `RUSTDL_REALIZE_PAIR_TIMEOUT_MS` for the one dispatch arm
 /// (`ClassAssertion`) that cannot take a deadline parameter. See the
 /// module doc for why 15s and for which arms this actually bounds.
-const REASONER_DEADLINE: Duration = Duration::from_secs(15);
+pub const REASONER_DEADLINE: Duration = Duration::from_secs(15);
 
 /// What the case says should happen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -523,11 +523,20 @@ fn verdict_for(held: bool, expect: Expectation, what: &str) -> Verdict {
 }
 
 /// Run one claim against its expectation and produce a verdict. See
-/// `verdict_for` for the asymmetry this delegates to.
-pub fn check(onto: &SetOntology<RcStr>, claim: &Claim, expect: Expectation) -> CheckOutcome {
+/// `verdict_for` for the asymmetry this delegates to. `deadline` is
+/// the caller's own time budget (a case's `timeout_ms`, or
+/// `REASONER_DEADLINE` where no case-specific budget applies); it is
+/// threaded straight into `holds_with_deadline`, so this is no longer
+/// a thin wrapper over `holds`'s module default.
+pub fn check(
+    onto: &SetOntology<RcStr>,
+    claim: &Claim,
+    expect: Expectation,
+    deadline: Duration,
+) -> CheckOutcome {
     let name = format!("{claim:?}");
 
-    let verdict = match holds(onto, claim) {
+    let verdict = match holds_with_deadline(onto, claim, deadline) {
         Err(OracleFailure::Timeout) => Verdict::Indeterminate(IndeterminateReason::Timeout),
         Err(OracleFailure::Error(msg)) => {
             Verdict::Indeterminate(IndeterminateReason::OracleError(msg))
@@ -542,12 +551,15 @@ pub fn check(onto: &SetOntology<RcStr>, claim: &Claim, expect: Expectation) -> C
 /// equivalence: `sub_expr ⊑ sup_expr` in every model iff
 /// `sub_expr ⊓ ¬sup_expr` is UNsatisfiable. Never calls the unbounded
 /// `class_expression_entailed_subclass`; see `probe_satisfiable`.
+/// `deadline` is the caller's time budget for this one check (a
+/// case's `timeout_ms`, or `REASONER_DEADLINE` where none applies).
 pub fn check_subsumption_expr(
     onto: &SetOntology<RcStr>,
     sub_expr: &str,
     sup_expr: &str,
     expect: Expectation,
     pm: &PrefixMapping,
+    deadline: Duration,
 ) -> CheckOutcome {
     let what = format!("{sub_expr} subClassOf {sup_expr}");
     let (sub, sup) = match (parse_ce(sub_expr, pm), parse_ce(sup_expr, pm)) {
@@ -565,7 +577,7 @@ pub fn check_subsumption_expr(
         ClassExpression::ObjectComplementOf(Box::new(sup)),
     ]);
 
-    let verdict = match probe_satisfiable(onto, intersection, REASONER_DEADLINE) {
+    let verdict = match probe_satisfiable(onto, intersection, deadline) {
         Ok(sat) => verdict_for(!sat, expect, &what),
         Err(OracleFailure::Timeout) => Verdict::Indeterminate(IndeterminateReason::Timeout),
         Err(OracleFailure::Error(msg)) => {
@@ -581,13 +593,16 @@ pub fn check_subsumption_expr(
 
 /// Is `individual` provably in `expr`? Exactly the shape Task 7 uses
 /// for its object-property fallback (`entailed_via_satisfiability_probe`),
-/// reused directly rather than duplicated.
+/// reused directly rather than duplicated. `deadline` is the
+/// caller's time budget for this one check; see
+/// `check_subsumption_expr`.
 pub fn check_instance_expr(
     onto: &SetOntology<RcStr>,
     individual: &str,
     expr: &str,
     expect: Expectation,
     pm: &PrefixMapping,
+    deadline: Duration,
 ) -> CheckOutcome {
     let what = format!("{individual} instanceOf {expr}");
     let ce = match parse_ce(expr, pm) {
@@ -600,7 +615,7 @@ pub fn check_instance_expr(
         }
     };
 
-    let verdict = match entailed_via_satisfiability_probe(onto, individual, ce, REASONER_DEADLINE) {
+    let verdict = match entailed_via_satisfiability_probe(onto, individual, ce, deadline) {
         Ok(held) => verdict_for(held, expect, &what),
         Err(OracleFailure::Timeout) => Verdict::Indeterminate(IndeterminateReason::Timeout),
         Err(OracleFailure::Error(msg)) => {
@@ -621,12 +636,15 @@ pub fn check_instance_expr(
 /// "expect unsatisfiable". A direct, always-expect-satisfiable claim
 /// about a *named* class already has a dedicated path
 /// (`Claim::Unsatisfiable`, via `holds`); this is for a raw Manchester
-/// expression with no class declaration behind it.
+/// expression with no class declaration behind it. `deadline` is the
+/// caller's time budget for this one check; see
+/// `check_subsumption_expr`.
 pub fn check_satisfiable_expr(
     onto: &SetOntology<RcStr>,
     expr: &str,
     expect: Expectation,
     pm: &PrefixMapping,
+    deadline: Duration,
 ) -> CheckOutcome {
     let what = format!("satisfiable: {expr}");
     let ce = match parse_ce(expr, pm) {
@@ -639,7 +657,7 @@ pub fn check_satisfiable_expr(
         }
     };
 
-    let verdict = match probe_satisfiable(onto, ce, REASONER_DEADLINE) {
+    let verdict = match probe_satisfiable(onto, ce, deadline) {
         Ok(sat) => verdict_for(sat, expect, &what),
         Err(OracleFailure::Timeout) => Verdict::Indeterminate(IndeterminateReason::Timeout),
         Err(OracleFailure::Error(msg)) => {

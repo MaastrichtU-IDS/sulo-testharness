@@ -344,3 +344,94 @@ fn a_claim_against_a_mis_declared_predicate_is_indeterminate_not_a_silent_pass()
         "a manifest predicate mistake must never resolve to a trustworthy Pass or Fail"
     );
 }
+
+// ---------------------------------------------------------------
+// timeout_ms wiring (fix round 1): the deadline a case declares must
+// actually reach the oracle. Same case, same claim, only the budget
+// differs: a tiny budget must produce Indeterminate(Timeout); a
+// generous one must produce a real verdict instead.
+// ---------------------------------------------------------------
+
+const SULO: &str = "../sulo/sulo.ttl";
+
+/// A language-tagged DataPropertyAssertion claim, identical in shape
+/// to `tests/oracle.rs`'s `a_zero_deadline_yields_timeout_not_a_false_negative`,
+/// which already proves a zero deadline reliably times this exact
+/// call out against SULO plus `parts.ttl`. Per `oracle`'s own module
+/// doc, the materialised fast path drops language tags entirely, so
+/// this claim always routes to the deadline-bounded
+/// `entailed_via_satisfiability_probe` fallback: a real tableau call
+/// every time, never short-circuited by a cheap structural match.
+/// A minimal, loss-free fixture was tried first and rejected: the
+/// search space was too trivial for a zero deadline to ever be
+/// noticed, so the reasoner returned a definite answer before the
+/// cooperative deadline check ever fired. Real SULO's size is what
+/// makes the zero-deadline case genuinely bite.
+fn timeout_sensitive_case(timeout_ms: u64) -> Case {
+    let mut case = base_case("timeout-wiring");
+    case.data = vec![PathBuf::from("parts.ttl")];
+    case.entails = Some("ex:n sulo:hasValue \"bonjour\"@fr .".into());
+    case.timeout_ms = timeout_ms;
+    case
+}
+
+#[test]
+fn a_tiny_timeout_ms_yields_indeterminate_timeout() {
+    let case = timeout_sensitive_case(0);
+    let result = run_case(&case, Path::new(SULO));
+
+    let entails_check = result
+        .checks
+        .iter()
+        .find(|c| !c.name.starts_with("gate:"))
+        .unwrap_or_else(|| panic!("expected the entails check to run, got {:?}", result.checks));
+
+    assert!(
+        matches!(
+            entails_check.verdict,
+            Verdict::Indeterminate(IndeterminateReason::Timeout)
+        ),
+        "a timeout_ms of 0 must expire immediately, got {:?}",
+        entails_check.verdict
+    );
+}
+
+#[test]
+fn a_generous_timeout_ms_yields_a_real_verdict_not_a_timeout() {
+    let case = timeout_sensitive_case(30_000);
+    let result = run_case(&case, Path::new(SULO));
+
+    let entails_check = result
+        .checks
+        .iter()
+        .find(|c| !c.name.starts_with("gate:"))
+        .unwrap_or_else(|| panic!("expected the entails check to run, got {:?}", result.checks));
+
+    assert!(
+        !matches!(
+            entails_check.verdict,
+            Verdict::Indeterminate(IndeterminateReason::Timeout)
+        ),
+        "a generous timeout_ms must not expire, got {:?}",
+        entails_check.verdict
+    );
+    // Real verdict, not vacuous, and distinct in kind from the tiny
+    // budget's Timeout: the reasoner actually finished its search
+    // this time. This exact claim is a documented reasoner-
+    // completeness gap for language-tagged data values (see
+    // data_fallback_terminates_with_a_sound_answer_for_a_language_tagged_literal
+    // in tests/oracle.rs), so it resolves to a trustworthy "no proof
+    // was found" Fail, which real SULO's own known, pre-existing,
+    // unrelated dropped-data-range conversion loss then correctly
+    // downgrades to Indeterminate(AxiomLoss(_)) per Ruling 4, item
+    // (a). The downgrade firing is itself proof the reasoner
+    // completed rather than expiring.
+    assert!(
+        matches!(
+            &entails_check.verdict,
+            Verdict::Indeterminate(IndeterminateReason::AxiomLoss(_))
+        ),
+        "expected a completed-and-downgraded verdict distinct from Timeout, got {:?}",
+        entails_check.verdict
+    );
+}

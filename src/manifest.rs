@@ -114,6 +114,15 @@ pub struct Case {
     pub satisfiable_expr: Vec<String>,
     pub unsatisfiable: Vec<String>,
     pub tags: Vec<String>,
+    /// The per-case reasoner time budget, in milliseconds, used as
+    /// the `deadline` for every check `run_case` makes on this case's
+    /// behalf. Defaults to 30000 (`default_timeout`). A value of 0
+    /// means "expire immediately", not "no limit": it forces a
+    /// deterministic `Indeterminate(Timeout)` on every check it
+    /// governs, matching the zero-deadline seam already used
+    /// elsewhere in this crate (`oracle::holds_with_deadline`) to
+    /// force a Timeout without depending on a real reasoner call
+    /// being slow.
     pub timeout_ms: u64,
     /// Directory the manifest lives in; all paths resolve against it.
     pub base_dir: PathBuf,

@@ -18,6 +18,7 @@
 //!    becomes a green build.
 
 use std::path::Path;
+use std::time::Duration;
 
 use crate::claim::{Claim, parse_fragment};
 use crate::load::{load_file, merge};
@@ -134,6 +135,14 @@ pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
 
     let pm = with_overrides(&base_mapping(), &case.prefixes);
 
+    // The case's own time budget, per check. A `timeout_ms` of 0
+    // means "expire immediately" (a deterministic Timeout on every
+    // check it governs), not "no limit": that matches the zero-
+    // deadline seam `holds_with_deadline` already uses elsewhere in
+    // this crate to force a Timeout without relying on a real
+    // reasoner call being slow. See `manifest::Case::timeout_ms`.
+    let deadline = Duration::from_millis(case.timeout_ms);
+
     // Gate: consistency before anything else. An inconsistent
     // ontology entails everything, so any check run against one would
     // be a meaningless pass.
@@ -201,7 +210,7 @@ pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
             match parse_fragment(text, &pm) {
                 Ok(claims) => {
                     for claim in &claims {
-                        checks.push(check(&onto, claim, expect));
+                        checks.push(check(&onto, claim, expect, deadline));
                     }
                 }
                 Err(e) => checks.push(CheckOutcome {
@@ -222,6 +231,7 @@ pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
             &s.sup_expr,
             Expectation::Entailed,
             &pm,
+            deadline,
         ));
     }
     for s in &case.not_entails_manchester {
@@ -231,6 +241,7 @@ pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
             &s.sup_expr,
             Expectation::NotEntailed,
             &pm,
+            deadline,
         ));
     }
     for i in &case.instance_of_expr {
@@ -240,16 +251,23 @@ pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
             &i.expr,
             Expectation::Entailed,
             &pm,
+            deadline,
         ));
     }
     for e in &case.satisfiable_expr {
-        checks.push(check_satisfiable_expr(&onto, e, Expectation::Entailed, &pm));
+        checks.push(check_satisfiable_expr(
+            &onto,
+            e,
+            Expectation::Entailed,
+            &pm,
+            deadline,
+        ));
     }
     for class in &case.unsatisfiable {
         match prefixes::expand(&pm, class) {
             Ok(iri) => {
                 let claim = Claim::Unsatisfiable { class: iri };
-                checks.push(check(&onto, &claim, Expectation::Entailed));
+                checks.push(check(&onto, &claim, Expectation::Entailed, deadline));
             }
             // Do not silently fall back to the raw, unexpanded token:
             // that would ask the reasoner about a class IRI the

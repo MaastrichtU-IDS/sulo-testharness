@@ -3,7 +3,9 @@ use std::time::Duration;
 
 use sulo_testharness::claim::{Claim, Literal};
 use sulo_testharness::load::{load_file, merge};
-use sulo_testharness::oracle::{Expectation, OracleFailure, check, holds, holds_with_deadline};
+use sulo_testharness::oracle::{
+    Expectation, OracleFailure, REASONER_DEADLINE, check, holds, holds_with_deadline,
+};
 use sulo_testharness::verdict::Verdict;
 
 const SULO: &str = "../sulo/sulo.ttl";
@@ -109,7 +111,7 @@ fn expectation_entailed_and_holding_is_a_trustworthy_pass() {
         sup: "https://w3id.org/sulo/Feature".into(),
     };
     assert_eq!(
-        check(&onto, &claim, Expectation::Entailed).verdict,
+        check(&onto, &claim, Expectation::Entailed, REASONER_DEADLINE).verdict,
         Verdict::Pass
     );
 }
@@ -123,7 +125,7 @@ fn expectation_not_entailed_and_not_holding_is_only_unrefuted() {
     };
     // Absence of a proof is not proof of absence.
     assert_eq!(
-        check(&onto, &claim, Expectation::NotEntailed).verdict,
+        check(&onto, &claim, Expectation::NotEntailed, REASONER_DEADLINE).verdict,
         Verdict::UnrefutedPass
     );
 }
@@ -136,7 +138,7 @@ fn expectation_not_entailed_but_holding_is_a_trustworthy_fail() {
         sup: "https://w3id.org/sulo/Feature".into(),
     };
     assert!(matches!(
-        check(&onto, &claim, Expectation::NotEntailed).verdict,
+        check(&onto, &claim, Expectation::NotEntailed, REASONER_DEADLINE).verdict,
         Verdict::Fail(_)
     ));
 }
