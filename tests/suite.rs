@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use sulo_testharness::load::load_file;
 use sulo_testharness::manifest::Case;
 use sulo_testharness::suite::{downgrade_for_loss, run_case};
 use sulo_testharness::verdict::{CheckOutcome, IndeterminateReason, Verdict};
@@ -421,10 +422,19 @@ fn a_generous_timeout_ms_yields_a_real_verdict_not_a_timeout() {
     // completeness gap for language-tagged data values (see
     // data_fallback_terminates_with_a_sound_answer_for_a_language_tagged_literal
     // in tests/oracle.rs), so it resolves to a trustworthy "no proof
-    // was found" Fail, which real SULO's own known, pre-existing,
-    // unrelated dropped-data-range conversion loss then correctly
-    // downgrades to Indeterminate(AxiomLoss(_)) per Ruling 4, item
-    // (a). The downgrade firing is itself proof the reasoner
+    // was found" Fail. That Fail is then downgraded to
+    // Indeterminate(AxiomLoss(_)) per Ruling 4, item (a), but NOT by
+    // real SULO's own dropped-data-range conversion loss: that is now
+    // a recognised, permanent baseline (src/load.rs's
+    // KNOWN_BASELINE_KIND) and no longer downgrades anything. The
+    // downgrade here instead comes from THIS FIXTURE's own,
+    // independent, genuine drop: tests/fixtures/parts.ttl's three
+    // `sulo:hasValue` literal assertions (plain, language-tagged,
+    // typed) include two rustdl's IR cannot represent
+    // ("DataPropertyAssertion: unsupported data range", loaded and
+    // reported before this fixture is even merged with SULO), which
+    // does not match the SubClassOf-shaped baseline and so is not
+    // exempted. The downgrade firing is itself proof the reasoner
     // completed rather than expiring.
     assert!(
         matches!(
@@ -433,5 +443,75 @@ fn a_generous_timeout_ms_yields_a_real_verdict_not_a_timeout() {
         ),
         "expected a completed-and-downgraded verdict distinct from Timeout, got {:?}",
         entails_check.verdict
+    );
+}
+
+// ---------------------------------------------------------------
+// Known-baseline loss allowlist (fix round 1, Ruling 1): loss that
+// matches the pinned reasoner's one known, permanent,
+// SubClassOf-shaped data-range gap must not downgrade anything; loss
+// that does not match it (a different fixture's genuinely different
+// drop) must downgrade exactly as before. Both directions proven
+// against real `load_file` output, not a synthetic loss string, so
+// this actually exercises the allowlist comparison in src/load.rs.
+// ---------------------------------------------------------------
+
+#[test]
+fn baseline_only_loss_from_real_sulo_does_not_downgrade() {
+    let loaded = load_file(Path::new(SULO)).expect("real SULO should load");
+
+    assert!(
+        loaded.loss.is_empty(),
+        "real SULO's only known loss is the baseline; loss beyond it should be empty, got {:?}",
+        loaded.loss
+    );
+    assert!(
+        !loaded.baseline_loss.is_empty(),
+        "the known baseline drop should still be surfaced, just not as loss"
+    );
+
+    let mut outs = vec![o(Verdict::Fail(
+        "expected to hold, but no proof was found: x".into(),
+    ))];
+    downgrade_for_loss(&mut outs, &loaded.loss);
+
+    assert!(
+        matches!(outs[0].verdict, Verdict::Fail(_)),
+        "baseline-only loss must not downgrade a positive Fail, got {:?}",
+        outs[0].verdict
+    );
+}
+
+#[test]
+fn loss_beyond_the_baseline_still_downgrades() {
+    // tests/fixtures/parts.ttl carries a genuinely different drop
+    // (DataPropertyAssertion, not SubClassOf) from three sulo:hasValue
+    // literal assertions rustdl's IR partly cannot represent. It does
+    // not match the SubClassOf-shaped baseline, so it must land in
+    // `loss`, not `baseline_loss`.
+    let loaded = load_file(Path::new("tests/fixtures/parts.ttl")).expect("fixture should load");
+
+    assert!(
+        !loaded.loss.is_empty(),
+        "a non-baseline-shaped drop must still be reported as loss"
+    );
+    assert!(
+        loaded.baseline_loss.is_empty(),
+        "a drop that does not match the baseline exactly must not be folded into it, got {:?}",
+        loaded.baseline_loss
+    );
+
+    let mut outs = vec![o(Verdict::Fail(
+        "expected to hold, but no proof was found: x".into(),
+    ))];
+    downgrade_for_loss(&mut outs, &loaded.loss);
+
+    assert!(
+        matches!(
+            outs[0].verdict,
+            Verdict::Indeterminate(IndeterminateReason::AxiomLoss(_))
+        ),
+        "loss beyond the baseline must still downgrade a positive Fail, got {:?}",
+        outs[0].verdict
     );
 }

@@ -11,10 +11,16 @@
 //!    `owl:AllDisjointProperties` is not, and stays reported as loss.
 //! 2. rustdl's conversion to its internal IR, which reports
 //!    `DroppedAxioms` for constructs it cannot represent (for
-//!    example, datatype facet restrictions and data-range unions:
-//!    real SULO carries two such axioms, permanently, at the pinned
-//!    rustdl tag; that is a reasoner expressivity gap, not something
-//!    this loader can recover).
+//!    example, datatype facet restrictions and data-range unions).
+//!    Real SULO carries exactly two such axioms, permanently, at the
+//!    pinned rustdl tag: a reasoner expressivity gap, not a defect in
+//!    SULO, and not something this loader can recover (the axioms
+//!    reach rustdl intact; its own internal conversion is what cannot
+//!    represent them). Loss matching that exact, known shape is
+//!    tracked separately as `Loaded::baseline_loss`: expected, always
+//!    surfaced, and never a reason to distrust a verdict. Anything
+//!    else, on either channel, is `Loaded::loss` and downgrades
+//!    exactly as before.
 //!
 //! Both must be surfaced. An unreported loss means the harness
 //! reasons over a weaker ontology than the one under test and says a
@@ -40,11 +46,42 @@ use horned_owl::vocab::{OWL as VOwl, RDF as VRdf};
 /// recognised vocabulary term.
 const ALL_DISJOINT_CLASSES_IRI: &str = "http://www.w3.org/2002/07/owl#AllDisjointClasses";
 
+/// The `owl_dl_reasoner::DroppedAxioms` kind string for the one known,
+/// permanent, conversion-channel gap in real SULO at the pinned
+/// rustdl tag: `sulo:TimeInstant`'s `owl:allValuesFrom [ owl:unionOf
+/// (xsd:dateTime xsd:dateTimeStamp) ]` restriction, and
+/// `sulo:InformationObject`'s `owl:allValuesFrom rdfs:Literal`
+/// restriction on `sulo:hasValue`, both `SubClassOf` axioms whose
+/// data range rustdl's IR cannot represent. This is a limitation of
+/// the pinned reasoner's datatype support (`owl-dl-core` calls its
+/// own data-range handling "Phase 3 minimal ... Phase 7 full concrete
+/// domains", i.e. not yet built), not a defect in SULO's
+/// axiomatisation.
+const KNOWN_BASELINE_KIND: &str = "SubClassOf: unsupported data range";
+/// How many axioms of `KNOWN_BASELINE_KIND` real SULO carries.
+/// Anything other than exactly this many, of exactly this one kind,
+/// is treated as loss beyond the baseline, not folded in: an
+/// allowlist, not a threshold, so a *new* drop of the same kind is
+/// just as loud as a drop of a different kind.
+const KNOWN_BASELINE_COUNT: u64 = 2;
+
 /// A loaded ontology plus anything lost on the way in.
 pub struct Loaded {
     pub ontology: SetOntology<RcStr>,
-    /// Human-readable descriptions of dropped content. Empty is good.
+    /// Human-readable descriptions of dropped content beyond the
+    /// known baseline (see `KNOWN_BASELINE_KIND`). Empty is good:
+    /// `suite::downgrade_for_loss` treats non-empty here as a reason
+    /// to distrust "no proof was found". Never includes the known
+    /// baseline drop; see `baseline_loss` for that.
     pub loss: Vec<String>,
+    /// Human-readable descriptions of loss matching the known,
+    /// permanent, pinned-reasoner baseline exactly. Non-empty here is
+    /// EXPECTED for real, unmodified SULO and must never downgrade a
+    /// verdict (`downgrade_for_loss` is never given this): the point
+    /// is that it is still surfaced, not silently dropped, so the
+    /// ontology's fidelity gap stays visible even though it is
+    /// trusted not to matter.
+    pub baseline_loss: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -114,25 +151,46 @@ pub fn load_file(path: &Path) -> Result<Loaded, LoadError> {
     }
     lower_disjoint_unions(&mut ontology);
 
-    // Second channel: what the reasoner's IR cannot represent.
+    let mut baseline_loss = Vec::new();
+
+    // Second channel: what the reasoner's IR cannot represent. Split
+    // against the known baseline (see `KNOWN_BASELINE_KIND`): an
+    // EXACT match (this one kind, this one count, nothing else) is
+    // expected and does not downgrade; anything else, downgrades
+    // exactly as before.
     match owl_dl_reasoner::dropped_axioms(&ontology) {
         Ok(dropped) if !dropped.is_empty() => {
-            let kinds: Vec<String> = dropped
-                .by_kind()
-                .iter()
-                .map(|(k, n)| format!("{k} x{n}"))
-                .collect();
-            loss.push(format!(
+            let kinds_map = dropped.by_kind();
+            let kinds: Vec<String> = kinds_map.iter().map(|(k, n)| format!("{k} x{n}")).collect();
+            let message = format!(
                 "conversion: {} dropped ({})",
                 dropped.total(),
                 kinds.join(", ")
-            ));
+            );
+
+            let is_known_baseline = kinds_map.len() == 1
+                && kinds_map.get(KNOWN_BASELINE_KIND) == Some(&KNOWN_BASELINE_COUNT);
+
+            if is_known_baseline {
+                eprintln!(
+                    "sulo-testharness: warning: known baseline loss in {}: {message} \
+                     (pinned-reasoner limitation, not a SULO defect; does not affect verdicts)",
+                    path.display()
+                );
+                baseline_loss.push(message);
+            } else {
+                loss.push(message);
+            }
         }
         Ok(_) => {}
         Err(e) => loss.push(format!("conversion: could not be checked: {e}")),
     }
 
-    Ok(Loaded { ontology, loss })
+    Ok(Loaded {
+        ontology,
+        loss,
+        baseline_loss,
+    })
 }
 
 /// True if a bnode-triple group is `<subj> a owl:AllDisjointClasses ;

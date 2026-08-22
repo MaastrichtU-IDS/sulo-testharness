@@ -5,21 +5,18 @@
 //! and MUST pass on clean SULO. A mutant nothing catches is a
 //! coverage hole in the suite, not a passing test.
 //!
-//! `CLEAN` is `mutants/clean.ttl`, not `../sulo/sulo.ttl` directly.
-//! See `mutants/README.md` for why: real SULO permanently carries two
-//! `SubClassOf` axioms (on `Duration` and `InformationObject`) that
-//! rustdl's IR conversion cannot represent and drops, unrelated to
-//! any of the four axioms under test here. That drop is real loss and
-//! `downgrade_for_loss` is right to distrust "no proof was found"
-//! whenever it is present, but it means a positive-expectation case
-//! run against literal `../sulo/sulo.ttl` can never resolve to a
-//! trustworthy `Fail`, on a mutant or otherwise: this loss is baked
-//! into the shipped file regardless of which axiom a mutant targets.
-//! `clean.ttl` is real SULO with exactly those two already-dropped,
-//! irrelevant restrictions textually removed; the reasoner never saw
-//! them either way, so nothing this suite tests is weakened by their
-//! absence. Every mutant is generated from `clean.ttl`, not from raw
-//! SULO, for the same reason.
+//! `CLEAN` is the real, unmodified `../sulo/sulo.ttl`. An earlier
+//! version of this file used a doctored `mutants/clean.ttl` copy,
+//! because real SULO permanently carries a `SubClassOf` loss on its
+//! conversion channel (two axioms, on `TimeInstant` and
+//! `InformationObject`, whose data ranges rustdl's IR cannot
+//! represent) that used to downgrade every positive-expectation
+//! `Fail` to `Indeterminate` regardless of whether a mutation was the
+//! cause. `src/load.rs` now recognises that exact, permanent shape as
+//! a known baseline (`KNOWN_BASELINE_KIND`/`KNOWN_BASELINE_COUNT`) and
+//! reports it via `Loaded::baseline_loss` instead of `Loaded::loss`,
+//! so it no longer downgrades anything. That fixed the root cause, so
+//! this file tests the real ontology, not a copy of it.
 
 use std::path::{Path, PathBuf};
 
@@ -27,7 +24,7 @@ use sulo_testharness::manifest::load_case;
 use sulo_testharness::suite::run_case;
 use sulo_testharness::verdict::Verdict;
 
-const CLEAN: &str = "mutants/clean.ttl";
+const CLEAN: &str = "../sulo/sulo.ttl";
 
 fn verdict_of(case_file: &str, ontology: &Path) -> Verdict {
     let case = load_case(Path::new(case_file)).expect("case should parse");
@@ -57,18 +54,15 @@ fn deleting_the_role_chain_breaks_the_pro_case() {
 }
 
 #[test]
-fn dropping_ispartof_transitivity_breaks_the_transitivity_case() {
-    // KNOWN COVERAGE HOLE, left failing on purpose. See
-    // `mutants/README.md` for the diagnosis: `sulo:hasPart` is
-    // `owl:inverseOf sulo:isPartOf` and is independently declared
-    // `owl:TransitiveProperty`, and OWL DL entails that a property's
-    // inverse is transitive whenever it is. Removing ONLY isPartOf's
-    // own `owl:TransitiveProperty` therefore removes nothing
-    // reachable: isPartOf's transitivity is still fully entailed via
-    // hasPart. Verified empirically, not just argued: this case
-    // resolves to `Pass` on this mutant, not `Fail`.
+fn dropping_parthood_transitivity_breaks_the_transitivity_case() {
+    // `no-transitive-parthood.ttl` removes owl:TransitiveProperty from
+    // BOTH sulo:isPartOf and its inverse sulo:hasPart. An earlier,
+    // narrower mutant (removing it only from isPartOf) was
+    // semantically inert: hasPart's own, untouched transitivity plus
+    // the inverseOf link fully re-derives isPartOf's transitivity
+    // regardless. See mutants/README.md for the empirical trace.
     assert_caught(
-        "no-transitive-ispartof.ttl",
+        "no-transitive-parthood.ttl",
         "suites/proof/transitivity-ispartof.yaml",
     );
 }
@@ -79,19 +73,17 @@ fn deleting_the_feature_disjoint_union_breaks_only_the_covering_case() {
 }
 
 #[test]
-fn deleting_the_ispartof_isin_subproperty_axiom_breaks_the_isin_case() {
-    // KNOWN COVERAGE HOLE, left failing on purpose, same shape as the
-    // transitivity hole above. See `mutants/README.md` for the full
-    // diagnosis: `sulo:contains` is `owl:inverseOf sulo:isIn`,
-    // `sulo:hasPart rdfs:subPropertyOf sulo:contains`, and `sulo:hasPart`
-    // is `owl:inverseOf sulo:isPartOf`. That parallel path (isPartOf ->
-    // inverse hasPart -> subproperty contains -> inverse isIn), plus
-    // isIn's own untouched transitivity, re-derives the same `isIn`
-    // conclusion this mutant's removed axiom was supposed to be
-    // necessary for. Verified empirically: this case resolves to
-    // `Pass`, not `Fail`, on this mutant.
+fn deleting_the_parthood_containment_subproperty_axioms_breaks_the_isin_case() {
+    // `no-subproperty-containment.ttl` removes BOTH
+    // `isPartOf rdfs:subPropertyOf isIn` and its inverse-side
+    // counterpart `hasPart rdfs:subPropertyOf contains`. An earlier,
+    // narrower mutant (removing only the isPartOf/isIn link) was
+    // semantically inert for the same shape of reason as the
+    // transitivity mutant above: the parallel route through
+    // hasPart/contains's inverse fully re-derives the isIn conclusion.
+    // See mutants/README.md for the empirical trace.
     assert_caught(
-        "no-subproperty-isin.ttl",
+        "no-subproperty-containment.ttl",
         "suites/proof/subproperty-isin.yaml",
     );
 }

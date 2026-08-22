@@ -303,7 +303,11 @@ sulo:hasValue a owl:DatatypeProperty,
 sulo:TimeInstant a owl:Class ;
     rdfs:label "time instant"@en ;
     rdfs:comment "time instant is a quantity of time a particular moment in time."@en ;
-    rdfs:subClassOf sulo:Time .
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:allValuesFrom [ a rdfs:Datatype ;
+                    owl:unionOf ( xsd:dateTime xsd:dateTimeStamp ) ] ;
+            owl:onProperty sulo:hasValue ],
+        sulo:Time .
 
 sulo:Time a owl:Class ;
     rdfs:label "time"@en ;
@@ -332,6 +336,9 @@ sulo:InformationObject a owl:Class ;
     rdfs:subClassOf [ a owl:Restriction ;
             owl:allValuesFrom sulo:InformationObject ;
             owl:onProperty sulo:hasPart ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom rdfs:Literal ;
+            owl:onProperty sulo:hasValue ],
         sulo:Feature .
 
 sulo:Object a owl:Class ;
