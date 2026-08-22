@@ -51,3 +51,47 @@ fn exit_codes_match_the_contract() {
         3
     );
 }
+
+// Order-independence tests. `aggregate` must select the highest-ranked
+// verdict regardless of where it sits in the input slice: real check
+// lists (Task 9) are ordered by run order, not by severity, so a
+// position-dependent implementation (for example, one that just
+// returned the last element) would silently produce wrong verdicts.
+// The tests above always put the winner last; these place it first
+// to pin the comparison, not the position, as the deciding factor.
+
+#[test]
+fn fail_beats_pass_when_fail_is_first() {
+    let out = vec![
+        outcome("a", Verdict::Fail("boom".into())),
+        outcome("b", Verdict::Pass),
+    ];
+    assert!(matches!(aggregate(&out), Verdict::Fail(_)));
+}
+
+#[test]
+fn indeterminate_beats_unrefuted_pass_when_indeterminate_is_first() {
+    let out = vec![
+        outcome("a", Verdict::Indeterminate(IndeterminateReason::Timeout)),
+        outcome("b", Verdict::UnrefutedPass),
+    ];
+    assert!(matches!(aggregate(&out), Verdict::Indeterminate(_)));
+}
+
+#[test]
+fn unrefuted_pass_beats_pass_when_unrefuted_pass_is_first() {
+    let out = vec![
+        outcome("a", Verdict::UnrefutedPass),
+        outcome("b", Verdict::Pass),
+    ];
+    assert_eq!(aggregate(&out), Verdict::UnrefutedPass);
+}
+
+#[test]
+fn fail_beats_indeterminate_when_fail_is_first() {
+    let out = vec![
+        outcome("a", Verdict::Fail("boom".into())),
+        outcome("b", Verdict::Indeterminate(IndeterminateReason::Timeout)),
+    ];
+    assert!(matches!(aggregate(&out), Verdict::Fail(_)));
+}
