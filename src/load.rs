@@ -3,10 +3,18 @@
 //!
 //! Two independent things can silently discard axioms:
 //!
-//! 1. horned-owl's RDF reader, which has no `AllDisjointClasses`
-//!    handling and puts unconsumed triples in `IncompleteParse`.
+//! 1. horned-owl's RDF reader, which has no vocabulary entry for
+//!    `owl:AllDisjointClasses` (nor for `owl:AllDisjointProperties`;
+//!    contrast `owl:AllDifferent`, which it does handle) and puts the
+//!    unconsumed triples in `IncompleteParse`. `owl:AllDisjointClasses`
+//!    is recovered from those leftovers below, by `recover_all_disjoint_classes`;
+//!    `owl:AllDisjointProperties` is not, and stays reported as loss.
 //! 2. rustdl's conversion to its internal IR, which reports
-//!    `DroppedAxioms` for constructs it cannot represent.
+//!    `DroppedAxioms` for constructs it cannot represent (for
+//!    example, datatype facet restrictions and data-range unions:
+//!    real SULO carries two such axioms, permanently, at the pinned
+//!    rustdl tag; that is a reasoner expressivity gap, not something
+//!    this loader can recover).
 //!
 //! Both must be surfaced. An unreported loss means the harness
 //! reasons over a weaker ontology than the one under test and says a
@@ -17,12 +25,20 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use horned_owl::io::ParserConfiguration;
-use horned_owl::io::rdf::reader::read as read_rdf;
+use horned_owl::io::rdf::reader::{IncompleteParse, Term, read as read_rdf};
 use horned_owl::model::{
-    ClassExpression, Component, DisjointClasses, DisjointUnion, EquivalentClasses, MutableOntology,
-    RcStr,
+    Build, ClassExpression, Component, DisjointClasses, DisjointUnion, EquivalentClasses,
+    MutableOntology, RcStr,
 };
 use horned_owl::ontology::set::SetOntology;
+use horned_owl::vocab::{OWL as VOwl, RDF as VRdf};
+
+/// The literal `owl:AllDisjointClasses` IRI. horned-owl's vocabulary
+/// has no enum variant for it (see `vocab.rs`: `AllDisjointProperties`
+/// is listed, `AllDisjointClasses` is not), so the RDF reader parses
+/// its `rdf:type` object as a plain `Term::Iri`, never as a
+/// recognised vocabulary term.
+const ALL_DISJOINT_CLASSES_IRI: &str = "http://www.w3.org/2002/07/owl#AllDisjointClasses";
 
 /// A loaded ontology plus anything lost on the way in.
 pub struct Loaded {
@@ -66,25 +82,36 @@ pub fn load_file(path: &Path) -> Result<Loaded, LoadError> {
     // so there is no `local_only`-style flag to set (that field does not
     // exist on this ParserConfiguration; a newer horned-owl adds one).
 
-    let (concrete, incomplete) = read_rdf(&mut reader, config).map_err(|e| LoadError::Parse {
-        path: path.to_path_buf(),
-        message: e.to_string(),
-    })?;
+    let (concrete, mut incomplete) =
+        read_rdf(&mut reader, config).map_err(|e| LoadError::Parse {
+            path: path.to_path_buf(),
+            message: e.to_string(),
+        })?;
+
+    let recovered_disjoint = recover_all_disjoint_classes(&mut incomplete);
 
     let mut loss = Vec::new();
     if !incomplete.is_complete() {
         loss.push(format!(
             "parse: {} simple triples, {} bnode triples, {} bnode sequences, \
-             {} orphan class expressions were not consumed \
-             (horned-owl does not handle owl:AllDisjointClasses)",
+             {} orphan class expressions were not consumed after recovering \
+             {} owl:AllDisjointClasses axiom(s) (horned-owl has no vocabulary \
+             entry for owl:AllDisjointClasses or owl:AllDisjointProperties; \
+             remaining leftovers are owl:AllDisjointProperties, an ambiguous \
+             owl:AllDisjointClasses shape recovery declined to guess at, or \
+             another unhandled construct)",
             incomplete.simple.len(),
             incomplete.bnode.len(),
             incomplete.bnode_seq.len(),
             incomplete.class_expression.len(),
+            recovered_disjoint.len(),
         ));
     }
 
     let mut ontology: SetOntology<RcStr> = concrete.into();
+    for dc in recovered_disjoint {
+        ontology.insert(dc);
+    }
     lower_disjoint_unions(&mut ontology);
 
     // Second channel: what the reasoner's IR cannot represent.
@@ -106,6 +133,103 @@ pub fn load_file(path: &Path) -> Result<Loaded, LoadError> {
     }
 
     Ok(Loaded { ontology, loss })
+}
+
+/// True if a bnode-triple group is `<subj> a owl:AllDisjointClasses ;
+/// owl:members <listHead>`, in either triple order (IncompleteParse's
+/// bnode groups have no guaranteed triple order).
+fn is_all_disjoint_classes_group(triples: &[[Term<RcStr>; 3]]) -> bool {
+    let has_type = triples.iter().any(|t| {
+        matches!(&t[1], Term::RDF(VRdf::Type))
+            && matches!(&t[2], Term::Iri(iri) if iri.as_ref() == ALL_DISJOINT_CLASSES_IRI)
+    });
+    let has_members = triples
+        .iter()
+        .any(|t| matches!(&t[1], Term::OWL(VOwl::Members)) && matches!(&t[2], Term::BNode(_)));
+    has_type && has_members
+}
+
+/// `Some(iris)` if every term in an RDF-list leftover is a plain IRI
+/// (so it reads as a plausible class list), and there are at least
+/// two of them (an `AllDisjointClasses` of fewer than two members
+/// asserts nothing).
+fn as_class_iri_list(terms: &[Term<RcStr>]) -> Option<Vec<String>> {
+    if terms.len() < 2 {
+        return None;
+    }
+    terms
+        .iter()
+        .map(|t| match t {
+            Term::Iri(iri) => Some(iri.as_ref().to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Recover `owl:AllDisjointClasses` axioms that horned-owl's RDF
+/// reader could not parse, from the leftovers it reports in
+/// `IncompleteParse`.
+///
+/// horned-owl's vocabulary has no entry for `owl:AllDisjointClasses`
+/// (unlike `owl:AllDifferent`, which its reader handles natively), so
+/// `[] a owl:AllDisjointClasses ; owl:members ( C1 .. Cn )` never
+/// reaches the parsed ontology: the type-and-members triples land in
+/// `IncompleteParse::bnode`, grouped by their blank-node subject, and
+/// the member list lands in `IncompleteParse::bnode_seq`. This walks
+/// both, recognises that exact shape, and reinserts the axiom as
+/// `DisjointClasses`, which is what `owl:AllDisjointClasses` means.
+///
+/// Matching a members list back to *its* declaration is not possible
+/// from this public API: `IncompleteParse` groups bnode triples by
+/// subject internally, but discards the subject id at the boundary
+/// (`bnode: Vec<VPosTriple<A>>`), and does the same for the list
+/// head's id (`bnode_seq: Vec<Vec<Term<A>>>`). So this only recovers
+/// when the count of qualifying `AllDisjointClasses`-shaped groups
+/// exactly equals the count of candidate (all-IRI, length >= 2)
+/// leftover lists. Under that condition the ambiguity is harmless:
+/// `AllDisjointClasses` is an anonymous n-ary axiom with no identity
+/// beyond its member list, so however the groups and lists are
+/// paired, the resulting axiom SET is the same. If the counts
+/// disagree, this declines to guess and changes nothing, leaving the
+/// leftovers to be reported as loss exactly as before.
+fn recover_all_disjoint_classes(
+    incomplete: &mut IncompleteParse<RcStr>,
+) -> Vec<DisjointClasses<RcStr>> {
+    let group_count = incomplete
+        .bnode
+        .iter()
+        .filter(|g| is_all_disjoint_classes_group(g.vec_triple()))
+        .count();
+
+    let candidate_indices: Vec<usize> = incomplete
+        .bnode_seq
+        .iter()
+        .enumerate()
+        .filter(|(_, terms)| as_class_iri_list(terms).is_some())
+        .map(|(i, _)| i)
+        .collect();
+
+    if group_count == 0 || group_count != candidate_indices.len() {
+        return Vec::new();
+    }
+
+    incomplete
+        .bnode
+        .retain(|g| !is_all_disjoint_classes_group(g.vec_triple()));
+
+    let build: Build<RcStr> = Build::new();
+    let mut recovered = Vec::new();
+    for &idx in candidate_indices.iter().rev() {
+        let terms = incomplete.bnode_seq.remove(idx);
+        let iris = as_class_iri_list(&terms).expect("filtered above");
+        let members = iris
+            .into_iter()
+            .map(|iri| ClassExpression::Class(build.class(iri)))
+            .collect();
+        recovered.push(DisjointClasses(members));
+    }
+
+    recovered
 }
 
 /// Rewrite every `DisjointUnion(C, D1..Dn)` into the two axioms it

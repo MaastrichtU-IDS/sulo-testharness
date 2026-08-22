@@ -1,0 +1,8 @@
+id: pro-role-chain
+description: The PRO role chain recovers the role holder's participation.
+data: data/pro-encounter.ttl
+prefixes:
+  ex: http://example.org/
+entails: |
+  ex:encounter sulo:hasParticipant ex:alice .
+  ex:encounter sulo:hasParticipant ex:drsmith .

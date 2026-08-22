@@ -1,0 +1,7 @@
+id: transitivity-ispartof
+description: isPartOf is transitive, so a three-step chain closes.
+data: data/parts.ttl
+prefixes:
+  ex: http://example.org/
+entails: |
+  ex:a sulo:isPartOf ex:c .

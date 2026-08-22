@@ -1,0 +1,14 @@
+@prefix sulo: <https://w3id.org/sulo/> .
+@prefix ex:   <http://example.org/> .
+
+ex:encounter a sulo:Process ;
+    sulo:hasParticipant ex:alice_role, ex:smith_role .
+
+ex:alice_role a sulo:Role ;
+    sulo:isFeatureOf ex:alice .
+
+ex:smith_role a sulo:Role ;
+    sulo:isFeatureOf ex:drsmith .
+
+ex:alice   a sulo:SpatialObject .
+ex:drsmith a sulo:SpatialObject .

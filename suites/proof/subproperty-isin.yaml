@@ -1,0 +1,7 @@
+id: subproperty-isin
+description: isPartOf is a subproperty of isIn, so parthood implies containment.
+data: data/parts.ttl
+prefixes:
+  ex: http://example.org/
+entails: |
+  ex:a sulo:isIn ex:c .

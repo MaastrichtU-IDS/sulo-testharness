@@ -1,0 +1,11 @@
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix ex:  <http://example.org/> .
+
+<http://example.org/onto> a owl:Ontology .
+
+ex:p a owl:ObjectProperty .
+ex:q a owl:ObjectProperty .
+ex:r a owl:ObjectProperty .
+
+[] a owl:AllDisjointProperties ;
+   owl:members ( ex:p ex:q ex:r ) .

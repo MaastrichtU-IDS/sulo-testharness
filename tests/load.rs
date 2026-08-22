@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use horned_owl::model::{Build, ClassExpression, Component, DeclareClass, RcStr, SubClassOf};
+use horned_owl::model::{
+    Build, ClassExpression, Component, DeclareClass, DisjointClasses, RcStr, SubClassOf,
+};
 use horned_owl::ontology::set::SetOntology;
 use sulo_testharness::load::{load_file, merge};
 
@@ -21,26 +23,58 @@ fn has_subclass_of(onto: &SetOntology<RcStr>, sub_iri: &str, sup_iri: &str) -> b
     onto.iter().any(|ac| ac.component == expected)
 }
 
+/// True if `onto` contains a `DisjointClasses` axiom over exactly this
+/// set of IRIs (order-insensitive: `owl:AllDisjointClasses` carries no
+/// order, and `recover_all_disjoint_classes` does not promise to
+/// preserve the source list's order either).
+fn has_disjoint_classes(onto: &SetOntology<RcStr>, iris: &[&str]) -> bool {
+    use std::collections::BTreeSet;
+    let b: Build<RcStr> = Build::new_rc();
+    let expected: BTreeSet<ClassExpression<RcStr>> = iris
+        .iter()
+        .map(|iri| ClassExpression::Class(b.class(*iri)))
+        .collect();
+    onto.iter().any(|ac| match &ac.component {
+        Component::DisjointClasses(DisjointClasses(members)) => {
+            members.iter().cloned().collect::<BTreeSet<_>>() == expected
+        }
+        _ => false,
+    })
+}
+
 #[test]
-fn loads_turtle_and_reports_alldisjointclasses_as_loss() {
+fn recovers_alldisjointclasses_from_incomplete_parse_leftovers() {
+    // horned-owl has no vocabulary entry for owl:AllDisjointClasses, so
+    // its triples land in IncompleteParse. `load_file` reconstructs the
+    // axiom from those leftovers, so this must now be loss-free, unlike
+    // before recovery existed (see the adjacent
+    // `alldisjointproperties_is_still_genuinely_dropped_as_loss`, which
+    // keeps this fixture's original intent alive for a construct
+    // recovery does not target).
     let loaded =
         load_file(Path::new("tests/fixtures/all-disjoint.ttl")).expect("fixture should parse");
 
-    // horned-owl has no AllDisjointClasses handling: the triples land in
-    // IncompleteParse. The harness must surface that, not swallow it.
     assert!(
-        !loaded.loss.is_empty(),
-        "AllDisjointClasses must be reported as loss, got none"
+        loaded.loss.is_empty(),
+        "owl:AllDisjointClasses should be recovered, not reported as loss: {:?}",
+        loaded.loss
     );
     assert!(
-        loaded.loss.iter().any(|d| d.contains("parse")),
-        "loss should name the parse channel, got {:?}",
-        loaded.loss
+        has_disjoint_classes(
+            &loaded.ontology,
+            &[
+                "http://example.org/A",
+                "http://example.org/B",
+                "http://example.org/C"
+            ]
+        ),
+        "expected a recovered DisjointClasses(A, B, C) axiom, got {:#?}",
+        loaded.ontology
     );
 
     // The three class declarations precede the AllDisjointClasses triples
     // and are ordinary axioms the reader does handle. If they are absent,
-    // no real parsing happened and the `loss` assertions above would be
+    // no real parsing happened and the assertions above would be
     // vacuously true for a stub that never touched the file.
     for iri in [
         "http://example.org/A",
@@ -50,6 +84,53 @@ fn loads_turtle_and_reports_alldisjointclasses_as_loss() {
         assert!(
             declares_class(&loaded.ontology, iri),
             "expected {iri} to be declared a class, got {:#?}",
+            loaded.ontology
+        );
+    }
+}
+
+/// Adapted from Task 2's original `owl:AllDisjointClasses` loss test,
+/// which the recovery above made vacuous (that construct is no longer
+/// loss). `owl:AllDisjointProperties` is the same shape
+/// (`[] a owl:AllDisjointProperties ; owl:members (...)`) but horned-owl
+/// has no vocabulary entry for it either, and `recover_all_disjoint_classes`
+/// deliberately does not target it (out of scope for this task; see
+/// `mutants/README.md`), so it stays genuinely, permanently dropped.
+/// This keeps Task 2's intent (the loader must surface what horned-owl
+/// cannot parse, not swallow it) meaningful against a construct that is
+/// still true of the current code.
+#[test]
+fn alldisjointproperties_is_still_genuinely_dropped_as_loss() {
+    let loaded = load_file(Path::new("tests/fixtures/all-disjoint-properties.ttl"))
+        .expect("fixture should parse");
+
+    assert!(
+        !loaded.loss.is_empty(),
+        "AllDisjointProperties must be reported as loss, got none"
+    );
+    assert!(
+        loaded.loss.iter().any(|d| d.contains("parse")),
+        "loss should name the parse channel, got {:?}",
+        loaded.loss
+    );
+
+    // The three property declarations are ordinary axioms the reader
+    // does handle; if absent, no real parsing happened and the loss
+    // assertions above would be vacuously true for a stub.
+    for iri in [
+        "http://example.org/p",
+        "http://example.org/q",
+        "http://example.org/r",
+    ] {
+        assert!(
+            loaded.ontology.iter().any(|ac| {
+                let b: Build<RcStr> = Build::new_rc();
+                ac.component
+                    == Component::DeclareObjectProperty(horned_owl::model::DeclareObjectProperty(
+                        b.object_property(iri),
+                    ))
+            }),
+            "expected {iri} to be declared an object property, got {:#?}",
             loaded.ontology
         );
     }

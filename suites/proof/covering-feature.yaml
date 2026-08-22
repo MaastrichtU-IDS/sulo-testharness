@@ -1,0 +1,5 @@
+id: covering-feature
+description: The Feature disjoint union covers its four members.
+entails_manchester:
+  - sub_expr: "sulo:Feature"
+    sup_expr: "sulo:Capability or sulo:InformationObject or sulo:Quality or sulo:Role"
