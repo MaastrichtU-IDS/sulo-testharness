@@ -13,10 +13,28 @@
 //! represent) that used to downgrade every positive-expectation
 //! `Fail` to `Indeterminate` regardless of whether a mutation was the
 //! cause. `src/load.rs` now recognises that exact, permanent shape as
-//! a known baseline (`KNOWN_BASELINE_KIND`/`KNOWN_BASELINE_COUNT`) and
-//! reports it via `Loaded::baseline_loss` instead of `Loaded::loss`,
-//! so it no longer downgrades anything. That fixed the root cause, so
-//! this file tests the real ontology, not a copy of it.
+//! a known baseline (`KNOWN_BASELINE_KIND`/`KNOWN_BASELINE_COUNT`,
+//! anchored on the two named axioms actually being present, not just
+//! their aggregate shape) and reports it via `Loaded::baseline_loss`
+//! instead of `Loaded::loss`, so it no longer downgrades anything.
+//! That fixed the root cause, so this file tests the real ontology,
+//! not a copy of it.
+//!
+//! `mutants_are_not_stale_against_current_sulo`, below, is a second,
+//! independent kind of test from the four `assert_caught` tests: it
+//! does not run the reasoner at all. It re-derives, in Rust, exactly
+//! what each mutant should be from whatever `../sulo/sulo.ttl`
+//! currently contains, and compares byte-for-byte against the
+//! committed mutant file. Without it, a SULO edit could go
+//! unreflected in the mutant files forever: `assert_caught`'s "clean"
+//! half would read the new ontology while its "mutant" half kept
+//! reading the old, frozen one, so all four tests could stay green
+//! while proving nothing about the CURRENT ontology, the exact
+//! "green while testing nothing" failure this whole file exists to
+//! rule out, reintroduced one level up. `mutants/regenerate.sh`
+//! performs the same four edits from the shell/Python side, so a
+//! SULO bump is one command; this test is what makes forgetting to
+//! run it a build failure instead of a silent gap.
 
 use std::path::{Path, PathBuf};
 
@@ -48,6 +66,14 @@ fn assert_caught(mutant: &str, case_file: &str) {
     );
 }
 
+fn assert_passes(case_file: &str, ontology: &Path) {
+    let v = verdict_of(case_file, ontology);
+    assert!(
+        matches!(v, Verdict::Pass | Verdict::UnrefutedPass),
+        "{case_file} must still pass on {ontology:?}, got {v:?}"
+    );
+}
+
 #[test]
 fn deleting_the_role_chain_breaks_the_pro_case() {
     assert_caught("no-role-chain.ttl", "suites/proof/role-chain.yaml");
@@ -70,6 +96,19 @@ fn dropping_parthood_transitivity_breaks_the_transitivity_case() {
 #[test]
 fn deleting_the_feature_disjoint_union_breaks_only_the_covering_case() {
     assert_caught("no-feature-union.ttl", "suites/proof/covering-feature.yaml");
+
+    // "Only": the other three proof cases must still pass on this
+    // exact mutant. This is the whole point of the AllDisjointClasses
+    // recovery in src/load.rs: the redundant AllDisjointClasses axiom
+    // over the same four classes still reaches the reasoner once the
+    // disjointUnionOf covering half is gone, so pairwise disjointness
+    // survives even though the covering property does not. If this
+    // failed, either the recovery regressed or the mutant edit spilled
+    // into an axiom it should not have touched.
+    let mutant = PathBuf::from("mutants").join("no-feature-union.ttl");
+    assert_passes("suites/proof/role-chain.yaml", &mutant);
+    assert_passes("suites/proof/transitivity-ispartof.yaml", &mutant);
+    assert_passes("suites/proof/subproperty-isin.yaml", &mutant);
 }
 
 #[test]
@@ -86,4 +125,112 @@ fn deleting_the_parthood_containment_subproperty_axioms_breaks_the_isin_case() {
         "no-subproperty-containment.ttl",
         "suites/proof/subproperty-isin.yaml",
     );
+}
+
+// ---------------------------------------------------------------
+// Staleness guard (fix round 2, IMPORTANT 3): each mutant must equal
+// CURRENT clean SULO with exactly its documented edit applied. These
+// functions independently re-derive, in Rust, the same four edits
+// mutants/regenerate.sh performs in Python/shell, so drift between
+// "what the mutant file contains" and "what today's SULO plus one
+// edit would produce" is a test failure, not a silent gap.
+// ---------------------------------------------------------------
+
+fn expected_no_role_chain(sulo: &str) -> String {
+    let needle = "    owl:inverseOf sulo:isParticipantIn ;\n    \
+                  owl:propertyChainAxiom ( sulo:hasParticipant [ owl:inverseOf sulo:hasFeature ] ) .";
+    assert_eq!(
+        sulo.matches(needle).count(),
+        1,
+        "propertyChainAxiom anchor text not found exactly once in current SULO; \
+         mutants/regenerate.sh and this staleness check both need updating"
+    );
+    sulo.replacen(needle, "    owl:inverseOf sulo:isParticipantIn .", 1)
+}
+
+fn strip_transitive_block(text: &str, anchor: &str) -> String {
+    let start = text
+        .find(anchor)
+        .unwrap_or_else(|| panic!("anchor {anchor:?} not found in current SULO"));
+    let end = text[start..]
+        .find("\n\n")
+        .map(|i| start + i)
+        .unwrap_or_else(|| panic!("no blank-line block end found after {anchor:?}"));
+    let block = &text[start..end];
+    let patched = block.replace(
+        "owl:ReflexiveProperty,\n        owl:TransitiveProperty ;",
+        "owl:ReflexiveProperty ;",
+    );
+    assert_ne!(
+        patched, block,
+        "transitivity pattern not found for {anchor:?} in current SULO"
+    );
+    format!("{}{}{}", &text[..start], patched, &text[end..])
+}
+
+fn expected_no_transitive_parthood(sulo: &str) -> String {
+    let out = strip_transitive_block(sulo, "sulo:isPartOf a owl:ObjectProperty");
+    strip_transitive_block(&out, "sulo:hasPart a owl:ObjectProperty")
+}
+
+fn expected_no_feature_union(sulo: &str) -> String {
+    let needle = "    owl:disjointUnionOf ( sulo:Capability sulo:InformationObject \
+                  sulo:Quality sulo:Role ) ;\n";
+    assert_eq!(
+        sulo.matches(needle).count(),
+        1,
+        "disjointUnionOf line not found exactly once in current SULO; \
+         mutants/regenerate.sh and this staleness check both need updating"
+    );
+    sulo.replacen(needle, "", 1)
+}
+
+fn expected_no_subproperty_containment(sulo: &str) -> String {
+    let needle_isin = "    rdfs:subPropertyOf sulo:isIn .";
+    assert_eq!(
+        sulo.matches(needle_isin).count(),
+        1,
+        "isPartOf's subPropertyOf isIn line not found exactly once in current SULO"
+    );
+    let out = sulo.replacen(needle_isin, "    a owl:ObjectProperty .", 1);
+
+    let needle_contains =
+        "    rdfs:subPropertyOf sulo:contains ;\n    owl:inverseOf sulo:isPartOf .";
+    assert_eq!(
+        out.matches(needle_contains).count(),
+        1,
+        "hasPart's subPropertyOf contains line not found exactly once in current SULO"
+    );
+    out.replacen(needle_contains, "    owl:inverseOf sulo:isPartOf .", 1)
+}
+
+#[test]
+fn mutants_are_not_stale_against_current_sulo() {
+    let sulo = std::fs::read_to_string(CLEAN).expect("real SULO should be readable");
+
+    let cases: [(&str, fn(&str) -> String); 4] = [
+        ("no-role-chain.ttl", expected_no_role_chain),
+        (
+            "no-transitive-parthood.ttl",
+            expected_no_transitive_parthood,
+        ),
+        ("no-feature-union.ttl", expected_no_feature_union),
+        (
+            "no-subproperty-containment.ttl",
+            expected_no_subproperty_containment,
+        ),
+    ];
+
+    for (name, derive) in cases {
+        let expected = derive(&sulo);
+        let mutant_path = PathBuf::from("mutants").join(name);
+        let actual = std::fs::read_to_string(&mutant_path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", mutant_path.display()));
+        assert_eq!(
+            expected, actual,
+            "mutants/{name} is stale: it no longer equals current SULO with exactly \
+             its documented edit applied. Run ./mutants/regenerate.sh, then re-review \
+             the diff (a SULO change may have altered more than the target axiom)."
+        );
+    }
 }

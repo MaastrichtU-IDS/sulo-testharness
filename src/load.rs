@@ -29,12 +29,13 @@
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
+use std::sync::Once;
 
 use horned_owl::io::ParserConfiguration;
 use horned_owl::io::rdf::reader::{IncompleteParse, Term, read as read_rdf};
 use horned_owl::model::{
-    Build, ClassExpression, Component, DisjointClasses, DisjointUnion, EquivalentClasses,
-    MutableOntology, RcStr,
+    Build, ClassExpression, Component, DataRange, DisjointClasses, DisjointUnion,
+    EquivalentClasses, MutableOntology, RcStr, SubClassOf,
 };
 use horned_owl::ontology::set::SetOntology;
 use horned_owl::vocab::{OWL as VOwl, RDF as VRdf};
@@ -60,10 +61,99 @@ const ALL_DISJOINT_CLASSES_IRI: &str = "http://www.w3.org/2002/07/owl#AllDisjoin
 const KNOWN_BASELINE_KIND: &str = "SubClassOf: unsupported data range";
 /// How many axioms of `KNOWN_BASELINE_KIND` real SULO carries.
 /// Anything other than exactly this many, of exactly this one kind,
-/// is treated as loss beyond the baseline, not folded in: an
-/// allowlist, not a threshold, so a *new* drop of the same kind is
-/// just as loud as a drop of a different kind.
+/// is treated as loss beyond the baseline, not folded in.
+///
+/// Kind and count alone are NOT the allowlist: they describe the
+/// baseline's shape, not its identity, and shape can coincide by
+/// accident (an unrelated file dropping exactly two same-kind axioms)
+/// or by a future SULO edit that swaps one of the two known axioms
+/// for a different one while keeping the aggregate the same. Either
+/// way that would silently exempt a loss that is not the known one.
+/// `has_known_baseline_axioms` below is the actual allowlist check:
+/// it requires the two NAMED axioms to still be present in the parsed
+/// ontology, in addition to this kind/count match. An additional
+/// third drop of the same kind still falls through to `loss` (kind
+/// matches, count does not); a drop that REPLACES one of the two
+/// named axioms with a different one also falls through, because the
+/// replaced axiom is no longer present even though kind and count
+/// look unchanged.
 const KNOWN_BASELINE_COUNT: u64 = 2;
+
+/// True if `ontology` still contains the two specific axioms
+/// `KNOWN_BASELINE_KIND`/`KNOWN_BASELINE_COUNT` describe by shape:
+/// `sulo:TimeInstant`'s `hasValue` restriction to
+/// `xsd:dateTime or xsd:dateTimeStamp`, and `sulo:InformationObject`'s
+/// `hasValue` restriction to `rdfs:Literal`. Confirmed against the
+/// real parsed ontology (not guessed from the Turtle source): both
+/// are `SubClassOf` components whose object is a `DataAllValuesFrom`
+/// on `sulo:hasValue`.
+///
+/// This is the identity anchor the kind/count check above is missing
+/// on its own. Without it, `is_known_baseline` would exempt: (a) any
+/// unrelated file loaded via `load_file` (an `ontology:`, `imports:`,
+/// or `data:` entry in a case) that happens to drop exactly two
+/// axioms of this same kind, even though it is not SULO at all; and
+/// (b) a future SULO revision that drops one of these two named
+/// axioms but adds a different, unrelated one, keeping the aggregate
+/// kind and count identical while the actual loss is new. Both are
+/// closed by requiring these exact axioms, not just their count, to
+/// still be present.
+fn has_known_baseline_axioms(ontology: &SetOntology<RcStr>) -> bool {
+    const SULO: &str = "https://w3id.org/sulo/";
+    const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+    const RDFS_LITERAL: &str = "http://www.w3.org/2000/01/rdf-schema#Literal";
+
+    let build: Build<RcStr> = Build::new();
+    let has_value = build.data_property(format!("{SULO}hasValue"));
+
+    let time_instant_axiom = Component::SubClassOf(SubClassOf {
+        sub: ClassExpression::Class(build.class(format!("{SULO}TimeInstant"))),
+        sup: ClassExpression::DataAllValuesFrom {
+            dp: has_value.clone(),
+            dr: DataRange::DataUnionOf(vec![
+                DataRange::Datatype(build.datatype(format!("{XSD}dateTime"))),
+                DataRange::Datatype(build.datatype(format!("{XSD}dateTimeStamp"))),
+            ]),
+        },
+    });
+
+    let information_object_axiom = Component::SubClassOf(SubClassOf {
+        sub: ClassExpression::Class(build.class(format!("{SULO}InformationObject"))),
+        sup: ClassExpression::DataAllValuesFrom {
+            dp: has_value,
+            dr: DataRange::Datatype(build.datatype(RDFS_LITERAL)),
+        },
+    });
+
+    let has_time_instant = ontology.iter().any(|ac| ac.component == time_instant_axiom);
+    let has_information_object = ontology
+        .iter()
+        .any(|ac| ac.component == information_object_axiom);
+
+    has_time_instant && has_information_object
+}
+
+/// Fires the known-baseline warning at most once per process, not
+/// once per case. Every case that loads real SULO (or any ontology
+/// carrying the exact baseline shape) would otherwise repeat an
+/// identical warning, which trains a reader to stop reading it. The
+/// warning names the specific file and message the FIRST time it
+/// fires; if a later load carries a different message (unlikely,
+/// since the shape is checked exactly, but not impossible across
+/// different files), the coordinator-facing warning speaks in general
+/// terms rather than claiming the first file's specifics again.
+static BASELINE_WARNING_ONCE: Once = Once::new();
+
+fn warn_known_baseline_once(path: &Path, message: &str) {
+    BASELINE_WARNING_ONCE.call_once(|| {
+        eprintln!(
+            "sulo-testharness: warning: known baseline loss in {}: {message} \
+             (pinned-reasoner limitation, not a SULO defect; does not affect \
+             verdicts; this warning prints once per process, not once per case)",
+            path.display()
+        );
+    });
+}
 
 /// A loaded ontology plus anything lost on the way in.
 pub struct Loaded {
@@ -154,10 +244,11 @@ pub fn load_file(path: &Path) -> Result<Loaded, LoadError> {
     let mut baseline_loss = Vec::new();
 
     // Second channel: what the reasoner's IR cannot represent. Split
-    // against the known baseline (see `KNOWN_BASELINE_KIND`): an
-    // EXACT match (this one kind, this one count, nothing else) is
-    // expected and does not downgrade; anything else, downgrades
-    // exactly as before.
+    // against the known baseline (see `KNOWN_BASELINE_KIND` and
+    // `has_known_baseline_axioms`): only an exact kind/count match
+    // AND the two named axioms actually being present is expected and
+    // does not downgrade; anything else, downgrades exactly as
+    // before.
     match owl_dl_reasoner::dropped_axioms(&ontology) {
         Ok(dropped) if !dropped.is_empty() => {
             let kinds_map = dropped.by_kind();
@@ -168,15 +259,12 @@ pub fn load_file(path: &Path) -> Result<Loaded, LoadError> {
                 kinds.join(", ")
             );
 
-            let is_known_baseline = kinds_map.len() == 1
+            let shape_matches = kinds_map.len() == 1
                 && kinds_map.get(KNOWN_BASELINE_KIND) == Some(&KNOWN_BASELINE_COUNT);
+            let is_known_baseline = shape_matches && has_known_baseline_axioms(&ontology);
 
             if is_known_baseline {
-                eprintln!(
-                    "sulo-testharness: warning: known baseline loss in {}: {message} \
-                     (pinned-reasoner limitation, not a SULO defect; does not affect verdicts)",
-                    path.display()
-                );
+                warn_known_baseline_once(path, &message);
                 baseline_loss.push(message);
             } else {
                 loss.push(message);
@@ -242,14 +330,23 @@ fn as_class_iri_list(terms: &[Term<RcStr>]) -> Option<Vec<String>> {
 /// subject internally, but discards the subject id at the boundary
 /// (`bnode: Vec<VPosTriple<A>>`), and does the same for the list
 /// head's id (`bnode_seq: Vec<Vec<Term<A>>>`). So this only recovers
-/// when the count of qualifying `AllDisjointClasses`-shaped groups
-/// exactly equals the count of candidate (all-IRI, length >= 2)
-/// leftover lists. Under that condition the ambiguity is harmless:
-/// `AllDisjointClasses` is an anonymous n-ary axiom with no identity
-/// beyond its member list, so however the groups and lists are
-/// paired, the resulting axiom SET is the same. If the counts
-/// disagree, this declines to guess and changes nothing, leaving the
-/// leftovers to be reported as loss exactly as before.
+/// when the pairing is provably total: the count of qualifying
+/// `AllDisjointClasses`-shaped groups must equal the count of
+/// candidate (all-IRI, length >= 2) lists, AND every leftover
+/// `bnode_seq` entry must be such a candidate (no leftover list is
+/// left unaccounted for, for example a bnode member or a
+/// length-one list from some other, unrelated construct). Only under
+/// BOTH conditions is the ambiguity harmless: `AllDisjointClasses` is
+/// an anonymous n-ary axiom with no identity beyond its member list,
+/// so however the groups and lists are paired, the resulting axiom
+/// SET is the same. Checking candidate count against group count
+/// alone is not enough: if some OTHER leftover list is not a
+/// candidate (contains a bnode, say) while an unrelated one coincides
+/// in count, the groups could be paired against the wrong lists,
+/// fabricating a `DisjointClasses` axiom over classes that were never
+/// declared disjoint. If either condition fails, this declines to
+/// guess and changes nothing, leaving the leftovers to be reported as
+/// loss exactly as before.
 fn recover_all_disjoint_classes(
     incomplete: &mut IncompleteParse<RcStr>,
 ) -> Vec<DisjointClasses<RcStr>> {
@@ -267,7 +364,10 @@ fn recover_all_disjoint_classes(
         .map(|(i, _)| i)
         .collect();
 
-    if group_count == 0 || group_count != candidate_indices.len() {
+    if group_count == 0
+        || group_count != candidate_indices.len()
+        || incomplete.bnode_seq.len() != candidate_indices.len()
+    {
         return Vec::new();
     }
 

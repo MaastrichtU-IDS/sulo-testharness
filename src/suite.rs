@@ -49,6 +49,16 @@ pub struct CaseResult {
     /// that PASSES its gate also stops here, and its remaining
     /// checks are genuinely skipped, not passed.
     pub skipped: bool,
+    /// Descriptions of loss matching the known, permanent,
+    /// pinned-reasoner baseline (see `load::Loaded::baseline_loss`),
+    /// accumulated across the ontology and every `imports`/`data`
+    /// file this case loaded. Never influences `verdict` (that would
+    /// defeat the point of the baseline allowlist), but is carried
+    /// here so a report or CI consumer has a machine-visible record
+    /// that the run was made over an ontology with axioms the
+    /// reasoner could not represent, rather than only a console
+    /// warning that scrolls away.
+    pub baseline_loss: Vec<String>,
 }
 
 /// Downgrade the verdicts that rest on an absence of proof, across
@@ -107,17 +117,20 @@ pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
                 verdict: Verdict::Indeterminate(IndeterminateReason::OracleError(e.to_string())),
                 checks,
                 skipped: true,
+                baseline_loss: Vec::new(),
             };
         }
     };
 
     let mut onto = loaded.ontology;
     let mut loss = loaded.loss;
+    let mut baseline_loss = loaded.baseline_loss;
 
     for extra in case.imports.iter().chain(case.data.iter()) {
         match load_file(&case.base_dir.join(extra)) {
             Ok(l) => {
                 loss.extend(l.loss);
+                baseline_loss.extend(l.baseline_loss);
                 merge(&mut onto, l.ontology);
             }
             Err(e) => {
@@ -128,6 +141,7 @@ pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
                     )),
                     checks,
                     skipped: true,
+                    baseline_loss,
                 };
             }
         }
@@ -154,6 +168,7 @@ pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
                 verdict: Verdict::Indeterminate(IndeterminateReason::OracleError(e.to_string())),
                 checks,
                 skipped: true,
+                baseline_loss,
             };
         }
     };
@@ -198,6 +213,7 @@ pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
             verdict,
             checks,
             skipped: gate_stops_here,
+            baseline_loss,
         };
     }
 
@@ -289,5 +305,6 @@ pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
         verdict,
         checks,
         skipped: false,
+        baseline_loss,
     }
 }

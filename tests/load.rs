@@ -187,3 +187,35 @@ fn merge_keeps_content_from_both_sides() {
         base
     );
 }
+
+/// Regression test for fix round 2, CRITICAL 1: the known-baseline
+/// check must anchor on which axioms were actually dropped, not just
+/// on the aggregate (kind, count) shape. `unrelated-data-range-drops.ttl`
+/// drops exactly two `SubClassOf` axioms of the exact same kind real
+/// SULO's known baseline uses, on classes (`ex:Foo`, `ex:Bar`) that
+/// have nothing to do with `sulo:TimeInstant`/`sulo:InformationObject`.
+/// Before `has_known_baseline_axioms` was added (fix round 1's
+/// `is_known_baseline` checked only `kinds_map.len() == 1 &&
+/// kinds_map.get(KIND) == Some(&COUNT)`), this fixture's loss was
+/// shape-identical to the real baseline and was silently exempted:
+/// confirmed by inspecting that exact code, which has no reference to
+/// which file or which axioms were involved. This must now fail that
+/// way: the loss must land in `loss` (and downgrade verdicts), not in
+/// `baseline_loss`.
+#[test]
+fn a_shape_identical_but_unrelated_drop_is_not_exempted_as_baseline() {
+    let loaded = load_file(Path::new("tests/fixtures/unrelated-data-range-drops.ttl"))
+        .expect("fixture should parse");
+
+    assert!(
+        !loaded.loss.is_empty(),
+        "an unrelated drop that merely matches the baseline's kind and count \
+         must still be reported as loss, got none"
+    );
+    assert!(
+        loaded.baseline_loss.is_empty(),
+        "an unrelated drop must never be folded into baseline_loss just because \
+         its kind and count coincide with the real baseline, got {:?}",
+        loaded.baseline_loss
+    );
+}
