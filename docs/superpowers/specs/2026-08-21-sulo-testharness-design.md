@@ -139,7 +139,7 @@ fix in an existing workflow, unrelated to logical regressions.
 | --- | --- | --- |
 | Location | Standalone `sulo-testharness` repository, consumed by `AIDAVA-DEV/sulo` CI as a pinned dependency | Mirrors the `horned-owl` / `horned-roundtrip` split; reusable against any SULO-based ontology; keeps the SULO repository lean |
 | Implementation | Rust CLI plus a composite GitHub Action | No JVM, no interpreter, hermetic; dogfoods `rustdl` on a real ontology; consumer CI needs no toolchain |
-| Reasoning | `owl-dl-reasoner` (rustdl) as an in-process library | Sound SROIQ(D). Covers most of what SULO uses, with two measured exceptions: the covering half of `DisjointUnion` and data-range `allValuesFrom`. Both are handled, see sections 6.1 and 9 |
+| Reasoning | `owl-dl-reasoner` (rustdl) **pinned to tag `v0.4.22`** as an in-process library | Sound SROIQ(D). Covers what SULO uses, including the covering half of `DisjointUnion` (corrected, see 6.1). One measured exception remains: data-range `allValuesFrom`, handled in section 9. The version pin is load-bearing, not incidental |
 | Parsing | `horned-owl` at the **same git rev rustdl pins**, `b188edaf7c92600918f0524962d928097ecd6b4d` (declares version 1.4.0) | Its RDF reader is parameterised over `oxrdfio::RdfFormat`, so Turtle is read directly with no conversion step. The rev matters: rustdl pins horned-owl by git rev, so depending on the published 2.0.0 instead would give two distinct crate instances whose `SetOntology` types cannot interoperate. Verified that this rev already contains the format-parameterisation commit `e6e3c49` |
 | SPARQL | `oxigraph` in-memory store | Competency questions run over asserted plus materialised triples |
 | Test declaration | YAML manifest plus sidecar `.ttl` and `.rq` files | Greppable, diff-friendly, adaptable by a non-programmer; no RDF ceremony for scaffolding |
@@ -221,7 +221,7 @@ HermiT is complete for OWL 2 DL, so it is the oracle of record for exactly the
 answers soundness cannot vouch for. A CI-only job cross-checks every negative
 assertion and every consistency verdict against HermiT via the existing ROBOT
 setup. This also covers the two gaps rustdl provably cannot see today: the
-covering half of `DisjointUnion` (section 6.1) and data-range `allValuesFrom`.
+data-range `allValuesFrom` (section 9).
 
 Disagreement between the two reasoners is its own verdict, **Divergence**, and it
 is always loud. It does not mean SULO regressed; it means one of the two
@@ -301,30 +301,50 @@ SOLID example it returns `alice_temp_1 a Quantity` and nothing else, whereas
 `Quantity`, `InformationObject`, `Feature`, and `Object`. Backing the claim with
 `realize` would make every non-most-specific class assertion fail spuriously.
 
-**Note on DisjointUnion, and a required pre-lowering step.** rustdl does not
-enforce the **covering** half of `DisjointUnion` in the ABox path. Verified: a
-`Feature` individual asserted to be none of `Capability`, `InformationObject`,
-`Quality`, or `Role` is reported `consistent`, with all five
-`ObjectComplementOf` assertions and both `DisjointUnion` axioms intact in the
-converted OFN. The disjointness half is enforced correctly; only the covering
-half is lost, and it is lost silently, with no `dropped_axioms` entry and no
-`incomplete` flag.
+**Note on DisjointUnion, and why the harness expands it anyway.** An earlier
+revision of this spec recorded, as a measured fact, that rustdl "does not enforce
+the covering half of `DisjointUnion` in the ABox path", and an adversarial review
+independently "confirmed" it. **Both measurements were wrong, and the error is
+worth recording because of how it happened.**
 
-Two consequences the design must respect:
+Both were taken through a locally built `rustdl` CLI binary. That binary came from
+rustdl's working tree at `f1ab66b`, **14 commits ahead of tag `v0.4.22`**, which is
+what this harness pins. Re-measured through the library at the pinned tag: a
+`Feature` individual asserted to be none of its four disjoint-union members IS
+correctly reported inconsistent, with no expansion required. The 14 intervening
+commits are themselves about entailment loss, so what the two measurements actually
+found is a **regression in rustdl after `v0.4.22`**, not a property of the pinned
+version. Minimal reproducer, worth carrying upstream:
 
-1. **Covering is checked as an entailment, never as a consistency probe.**
-   Verified working: `subclass-expr Feature "(Capability or InformationObject or
-   Quality or Role)"` returns `entailed: true` on clean SULO, and the deliberate
-   non-covering `subclass-expr Object "(SpatialObject or Feature)"` returns
-   `entailed: false`. An earlier draft specified both as `expect_inconsistent`
-   cases, which would have hard-failed on healthy SULO for the covering pair and
-   been silently vacuous for the non-covering pair.
-2. **`load.rs` pre-lowers every `DisjointUnion(C, D1..Dn)`** to
-   `EquivalentClasses(C, ObjectUnionOf(D1..Dn))` plus `DisjointClasses(D1..Dn)`
-   before handing the ontology to the reasoner, which restores the missing
-   covering behaviour in the ABox path as well. This is a workaround for a
-   reasoner bug and is labelled as one in the code, with a link to the filed
-   rustdl issue, so it can be removed when fixed.
+```turtle
+ex:F a owl:Class ; owl:disjointUnionOf ( ex:A ex:B ) .
+ex:x a ex:F, [ owl:complementOf ex:A ], [ owl:complementOf ex:B ] .
+# v0.4.22 (666d31b): inconsistent, correct.  f1ab66b: consistent, wrong.
+```
+
+The lesson generalises past this one axiom: **measure the version you pin, through
+the interface you use.** An ad-hoc CLI binary built from a working tree is not the
+library at a tag, and here the difference inverted a load-bearing conclusion that
+had already survived one adversarial review.
+
+Two consequences stand, for reasons that survive the correction:
+
+1. **Covering is still checked as an entailment, not as a consistency probe.**
+   `subclass-expr Feature "(Capability or InformationObject or Quality or Role)"`
+   returns `entailed: true` on clean SULO, and the deliberate non-covering
+   `Object ⋢ (SpatialObject or Feature)` returns `entailed: false`. This is the
+   better formulation regardless of the bug: it asserts the axiom's content
+   directly rather than inferring it from a counter-example, and it gives the two
+   deliberate non-coverings something to assert that is not vacuous.
+2. **`load.rs` still expands every `DisjointUnion(C, D1..Dn)`** into
+   `EquivalentClasses(C, ObjectUnionOf(D1..Dn))` plus `DisjointClasses(D1..Dn)`.
+   This is **not** a bug workaround. It is a semantics-preserving explicitation:
+   the two axioms are exactly what `DisjointUnion` abbreviates, so the expansion
+   cannot make the ontology assert anything false. It is kept as defense-in-depth
+   against precisely the class of oracle regression documented above, so the
+   harness does not silently depend on the reasoner implementing the covering half
+   natively. Because the expansion is semantics-preserving, it needs no version
+   condition and no removal date.
 
 Note also that the Manchester parser requires full `<IRI>` forms or a declared
 prefix map; bare names are rejected. See section 7.
@@ -798,7 +818,14 @@ against `sulo.ttl` at version 0.2.14:
 | the SOLID example is consistent | `consistent` |
 | `hasValue` functionality bites | a second literal on the same `Quantity`: `inconsistent` |
 
-### 13.1 What the first validation pass missed
+### 13.1 What the first validation pass missed, and what it got wrong
+
+The table above tested only the paths that work. A later adversarial review tested
+the paths that do not. It found four real problems, and it also produced one
+**false** finding that I confirmed rather than checked, which is the more useful
+lesson: the `DisjointUnion` covering row below was measured through an ad-hoc CLI
+binary 14 commits past the pinned tag, and is retracted. Measure the version you
+pin, through the interface you use. See section 6.1.
 
 The table above tested only the paths that work. A subsequent adversarial review
 tested the paths that do not, and found four problems serious enough to have
@@ -807,8 +834,8 @@ design-validation pass that only confirms its own happy path is not validation.
 
 | Probe | Result |
 | --- | --- |
-| `DisjointUnion` covering enforced in the ABox? | **no.** A `Feature` asserted to be none of its 4 members: `consistent`, with all complements and both union axioms intact in the OFN. Two suite cases would have hard-failed on healthy SULO. |
-| covering as an entailment instead? | works. `Feature ⊑ (Capability or InformationObject or Quality or Role)`: `entailed: true`; the deliberate `Object ⋢ (SpatialObject or Feature)`: `entailed: false` |
+| `DisjointUnion` covering enforced in the ABox? | **RETRACTED. Measured wrong twice.** Read `consistent` through a CLI binary built 14 commits past the pinned tag. At `v0.4.22`, through the library, it is correctly `inconsistent`. See section 6.1: this was a rustdl regression after the tag, not a property of the pinned version. |
+| covering as an entailment instead? | works, and is retained as the better formulation. `Feature ⊑ (Capability or InformationObject or Quality or Role)`: `entailed: true`; the deliberate `Object ⋢ (SpatialObject or Feature)`: `entailed: false` |
 | `property-values` emits reflexive self-loops? | **no.** No `x isPartOf x` for any individual, so the reflexivity case would have failed spuriously. `instances-expr "(isPartOf value ex:d)"` returns `ex:d` correctly. |
 | `incomplete` flag rare on SULO? | **no.** `true` on essentially every non-EL query, including both covering checks. Invalidated the "Indeterminate should be empty" premise the verdict design rested on. |
 | `sulo.ttl` disjointness axiom count | **9, not 7.** Two `AllDisjointClasses` axioms at lines 374 to 378, silently dropped by horned-owl. |
