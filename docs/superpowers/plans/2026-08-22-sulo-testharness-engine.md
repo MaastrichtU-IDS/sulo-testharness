@@ -15,7 +15,18 @@
 - **Rust toolchain 1.95.0**, edition 2024. Matches rustdl's `rust-toolchain.toml` pin; a lower toolchain will not build the reasoner.
 - **`horned-owl` MUST be pinned to git rev `b188edaf7c92600918f0524962d928097ecd6b4d`** from `https://github.com/micheldumontier/horned-owl`. This is the rev rustdl itself pins. Cargo unifies a git dependency only on exact source plus rev match, so depending on crates.io `horned-owl = "2.0.0"` instead compiles a second copy of the crate and the `SetOntology` you parse becomes a different type from the one `owl_dl_reasoner::is_consistent` accepts. Symptom: a type-mismatch error naming two identical-looking types.
 - **`owl-dl-reasoner` pinned to rustdl tag `v0.4.22`.** During local development a `[patch]` to the sibling checkout at `../rustdl` is acceptable; the committed `Cargo.toml` must name the tag.
-- **All parsing uses `local_only: true`.** The harness must never touch the network. `sulo-dev.ttl` carries `owl:imports <https://w3id.org/sulo/sulo.ttl>`, and the non-closure reader plus `local_only` guarantees a hermetic run. Manifest `imports:` is the only supported way to merge another ontology.
+- **Parsing must never touch the network.** `sulo-dev.ttl` carries
+  `owl:imports <https://w3id.org/sulo/sulo.ttl>`, so this is not hypothetical.
+  Corrected during Task 2: `ParserConfiguration` at the pinned rev has **no**
+  `local_only` field (that field is a later addition, present in the 2.0.0 working
+  tree I originally checked but not at `b188eda`). Hermeticity instead holds
+  structurally, and was verified at the pinned rev: `resolve_imports()` only
+  records an `Import` axiom and returns the IRI list, it fetches nothing, and the
+  one network path, `strict_resolve_iri`, is reachable only from `from_doc_iri`,
+  a constructor this design does not use. Use the non-closure
+  `io::rdf::reader::read` over a `BufRead` and never
+  `io::rdf::closure_reader::read`, which is the one that follows imports.
+  Manifest `imports:` is the only supported way to merge another ontology.
 - **Exit codes are contract:** `0` all pass, `1` any Fail, `2` harness or configuration error, `3` any Indeterminate, `4` golden drift or re-baseline required, `5` oracle divergence.
 - **No JVM anywhere in this plan.** The HermiT differential is a later phase.
 - **No em-dashes in any output, comment, or documentation text.** Use commas, colons, parentheses, or sentence breaks.
@@ -410,8 +421,8 @@ pub fn load_file(path: &Path) -> Result<Loaded, LoadError> {
 
     let mut config = ParserConfiguration::default();
     config.rdf.format = Some(oxrdfio::RdfFormat::Turtle);
-    // Hermetic: never resolve an owl:imports over the network.
-    config.local_only = true;
+    // Hermetic by construction at the pinned rev: the non-closure reader
+    // never dereferences an owl:imports IRI. See Global Constraints.
 
     let (concrete, incomplete) = read_rdf(&mut reader, config)
         .map_err(|e| LoadError::Parse { path: path.to_path_buf(), message: e.to_string() })?;
