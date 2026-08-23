@@ -1,0 +1,6 @@
+# A case that parses perfectly and asserts nothing at all. Before
+# `ManifestError::NoAssertions` this loaded fine and `run_case`
+# returned Pass over an empty check set: a confident green for a case
+# that tests nothing.
+id: asserts-nothing
+description: Has an id and a description and not one thing to check.

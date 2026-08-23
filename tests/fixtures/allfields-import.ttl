@@ -1,0 +1,10 @@
+# Loaded only via `imports:`. ex:Bad is a subclass of two disjoint
+# classes, hence unsatisfiable, and it exists NOWHERE else: the
+# `unsatisfiable: [ex:Bad]` assertion in case-all-fields.yaml is
+# therefore a direct test that the imports channel is wired.
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ex:   <http://example.org/> .
+
+ex:Bad a owl:Class ;
+    rdfs:subClassOf ex:A, ex:C .

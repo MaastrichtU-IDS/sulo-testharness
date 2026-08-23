@@ -1,0 +1,7 @@
+# `expect_inconsistent: true` makes the consistency gate itself the
+# assertion, so this is a complete case despite setting no entailment
+# field. Guards `ManifestError::NoAssertions` against over-rejecting.
+id: expects-inconsistency-only
+description: The consistency gate is the whole test.
+ontology: inconsistent.ttl
+expect_inconsistent: true

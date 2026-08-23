@@ -2,9 +2,13 @@
 //!
 //! Dispatch choices, revised twice already and worth recording why:
 //!
-//! * `ClassAssertion` uses `is_instance_of`, which returns the full
-//!   type closure. `realize` returns only most-specific types, so it
-//!   would fail every non-leaf class assertion.
+//! * `ClassAssertion` originally used `is_instance_of`, which returns
+//!   the full type closure, rather than `realize`, which returns only
+//!   most-specific types and so would fail every non-leaf class
+//!   assertion. It now uses a bounded satisfiability probe instead,
+//!   for the deadline reason set out further down; the `realize`
+//!   note is kept because that trap is still there for anyone
+//!   tempted to reach for the obvious call.
 //! * `ObjectPropertyAssertion` and `DataPropertyAssertion` try the
 //!   materialised `inferred_*_property_values` first. The first cut
 //!   of this module went straight to a `p value o` class-expression
@@ -66,22 +70,47 @@
 //!
 //! `Claim::Unsatisfiable` uses `is_class_satisfiable_with_timeout`
 //! (not the unbounded `is_class_satisfiable`), mapping `Ok(None)` to
-//! `Timeout`. `Claim::ClassAssertion`'s `is_instance_of` has no
-//! deadline *parameter* at all; it reads
-//! `RUSTDL_REALIZE_PAIR_TIMEOUT_MS` (default 750ms) and collapses a
-//! deadline expiry, a max-nodes trip, and a depth bail all to a
-//! trustworthy-looking `false`, discarding which one happened.
-//! `ensure_realize_deadline_set` pins that environment variable to
-//! this module's own `REASONER_DEADLINE` once, process-wide, so the
-//! bound is the harness's choice, not the library default; a `false`
-//! that took at least that long is then treated as a truncation
-//! (`Timeout`), not a trustworthy negative. This is the one dispatch
-//! arm that does not honour `holds_with_deadline`'s own `deadline`
-//! argument (it always uses `REASONER_DEADLINE`): the environment
-//! variable is process-global and set at most once, so per-call
-//! values are not plumbed through it. Every other arm (the object
-//! and data fallbacks, and `Unsatisfiable`) takes `deadline`
-//! directly and honours it exactly.
+//! `Timeout`.
+//!
+//! `Claim::Subsumption`, `Claim::Equivalence` and
+//! `Claim::ClassAssertion` are all expressed as bounded probes rather
+//! than as the library calls that read most naturally for them, and
+//! that is deliberate:
+//!
+//! * `is_subclass_of` (`lib.rs:5932` at the pinned rev) IS the
+//!   `sub ⊓ ¬sup` tableau, but with no deadline parameter and no
+//!   cooperative deadline check, and `Equivalence` would run it
+//!   twice. That made the commonest manifest shape of all
+//!   (`entails: sulo:A rdfs:subClassOf sulo:B`) the one unbounded,
+//!   uninterruptible tableau in the harness, in a codebase whose
+//!   precedent is an unbounded reasoner call hanging for 24 minutes
+//!   30 seconds. Both arms now perform exactly the same reduction
+//!   through `probe_satisfiable`, which gets a real,
+//!   library-enforced, cooperatively-checked deadline.
+//! * `is_instance_of` has no deadline parameter either; it reads
+//!   `RUSTDL_REALIZE_PAIR_TIMEOUT_MS` (default 750ms) and collapses a
+//!   deadline expiry, a max-nodes trip, and a depth bail all to a
+//!   trustworthy-looking `false`, discarding which one happened. An
+//!   earlier revision pinned that environment variable process-wide
+//!   with `unsafe { set_var }` and then inferred a truncation from
+//!   wall-clock elapsed time. That was both unsound and unnecessary.
+//!   Unsound: the `SAFETY` note claimed nothing else in the process
+//!   touched the key, but `realize.rs`'s
+//!   `realize_pair_timeout_ms_from_env` calls `std::env::var` on
+//!   exactly that key on every `is_instance_of_internal` invocation,
+//!   and `set_var` is unsound against any concurrent `getenv`
+//!   anywhere in the process (rustdl reads a dozen `RUSTDL_*` vars),
+//!   while `cargo test` runs threads in parallel in one binary.
+//!   Unnecessary: `entailed_via_satisfiability_probe` answers the
+//!   same question (`{i} ⊓ ¬C` unsatisfiable) with a real deadline,
+//!   so the `unsafe`, the `Once`, and the elapsed-time heuristic are
+//!   all gone.
+//!
+//! Every dispatch arm therefore takes `deadline` and honours it
+//! exactly. The one unbounded reasoner call still reachable from a
+//! case is the consistency gate in `suite::run_case`, which has no
+//! deadline-bearing variant at the pinned version; that is stated in
+//! the gate's own doc comment rather than left implicit here.
 //!
 //! `ObjectPropertyValues::incomplete()` (from the object fast path)
 //! and the `CeInstances::incomplete()` this module used to see (from
@@ -119,14 +148,30 @@
 //!   silent `UnrefutedPass` (negative expectation) instead of the
 //!   Indeterminate it actually is. `holds` checks the ontology's own
 //!   declarations before querying.
+//! * Accept an undeclared term in a class expression. The same
+//!   defect, on the Manchester path: `parse_ce` never consults the
+//!   ontology, and rustdl's `convert_ontology` registers any IRI that
+//!   appears in an axiom whether it was declared or not (that is
+//!   exactly how `PROBE_IRI` works here). So `sulo:Featuer` would
+//!   become a fresh, unconstrained class: trivially satisfiable,
+//!   trivially not subsumed, hence a green `Pass`/`UnrefutedPass` for
+//!   a typo. All three Manchester checks now walk the parsed
+//!   expression and reject any class, object property, data property
+//!   or individual the ontology does not declare (`Declared`,
+//!   `require_declared_terms`). Routing `Subsumption`,
+//!   `Equivalence` and `ClassAssertion` through the probe removed
+//!   their old accidental guard (`is_subclass_of` and
+//!   `is_instance_of` raise `UnknownClass` for an undeclared class),
+//!   so those arms now check declarations explicitly instead.
 
+use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use curie::PrefixMapping;
 use horned_owl::model::{
-    AnnotationProperty, Build, ClassExpression, Component, DataProperty, DeclareAnnotationProperty,
-    DeclareDataProperty, DeclareObjectProperty, EquivalentClasses, Individual, MutableOntology,
-    ObjectProperty, ObjectPropertyExpression, RcStr,
+    AnnotationProperty, Build, Class, ClassExpression, Component, DataProperty,
+    DeclareAnnotationProperty, DeclareDataProperty, DeclareObjectProperty, EquivalentClasses,
+    Individual, MutableOntology, ObjectProperty, ObjectPropertyExpression, RcStr,
 };
 use horned_owl::ontology::set::SetOntology;
 
@@ -144,11 +189,21 @@ const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const PROBE_IRI: &str = "urn:sulo-testharness:probe:q";
 
 /// Bound on the reasoner's per-query work: the harness's own choice,
-/// used everywhere a deadline can be passed explicitly, and pinned
-/// into `RUSTDL_REALIZE_PAIR_TIMEOUT_MS` for the one dispatch arm
-/// (`ClassAssertion`) that cannot take a deadline parameter. See the
-/// module doc for why 15s and for which arms this actually bounds.
+/// used wherever no case-specific `timeout_ms` applies. Every dispatch
+/// arm and every Manchester check now takes a deadline explicitly, so
+/// this is a default rather than a special case for one arm; see the
+/// module doc for why 15s, and for the one call in the crate
+/// (`suite`'s consistency gate) that no deadline can reach.
 pub const REASONER_DEADLINE: Duration = Duration::from_secs(15);
+
+/// The substring that marks a `Fail` as resting on an absence of
+/// proof rather than on a proof. Produced by `verdict_for` and matched
+/// by `suite::downgrade_for_loss`, which is the most common downgrade
+/// in the system: coupling those two by an inline string literal meant
+/// that editing the message silently switched the downgrade off. A
+/// shared constant makes that impossible, the same way `suite`'s
+/// `GATE_*` constants do for the gate's check names.
+pub const NO_PROOF_MARKER: &str = "no proof was found";
 
 /// What the case says should happen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,23 +301,235 @@ fn require_data_property(onto: &SetOntology<RcStr>, iri: &str) -> Result<(), Str
     }
 }
 
-/// Set once, process-wide: see the module doc for why `ClassAssertion`
-/// cannot take a per-call deadline the way the other arms do.
-static SET_REALIZE_DEADLINE: std::sync::Once = std::sync::Once::new();
+/// The OWL builtin terms that are always available whether or not an
+/// ontology declares them. Nothing else is granted an exemption from
+/// `Declared`.
+const BUILTIN_CLASSES: [&str; 2] = [
+    "http://www.w3.org/2002/07/owl#Thing",
+    "http://www.w3.org/2002/07/owl#Nothing",
+];
+const BUILTIN_OBJECT_PROPERTIES: [&str; 2] = [
+    "http://www.w3.org/2002/07/owl#topObjectProperty",
+    "http://www.w3.org/2002/07/owl#bottomObjectProperty",
+];
+const BUILTIN_DATA_PROPERTIES: [&str; 2] = [
+    "http://www.w3.org/2002/07/owl#topDataProperty",
+    "http://www.w3.org/2002/07/owl#bottomDataProperty",
+];
 
-fn ensure_realize_deadline_set() {
-    SET_REALIZE_DEADLINE.call_once(|| {
-        // SAFETY: `call_once` guarantees this runs exactly once, and
-        // no other code in this process reads or writes
-        // `RUSTDL_REALIZE_PAIR_TIMEOUT_MS`, so there is no concurrent
-        // access to race against.
-        unsafe {
-            std::env::set_var(
-                "RUSTDL_REALIZE_PAIR_TIMEOUT_MS",
-                REASONER_DEADLINE.as_millis().to_string(),
-            );
+/// Every named term the ontology actually declares, gathered in one
+/// pass. Exists for the same reason `declared_property_kind` does: an
+/// IRI nobody declared is silently accepted everywhere downstream, so
+/// a typo becomes a fresh unconstrained entity rather than an error.
+///
+/// Individuals count as declared when they appear in ANY assertion,
+/// not only under an explicit `DeclareNamedIndividual`. RDF-serialised
+/// data routinely omits `a owl:NamedIndividual`
+/// (`tests/fixtures/parts.ttl` does), so demanding the declaration
+/// would reject correct cases. Datatypes are deliberately NOT
+/// collected or checked: the ones an author writes are XSD builtins,
+/// which no ontology declares, so a check there would be noise rather
+/// than protection.
+struct Declared {
+    classes: BTreeSet<String>,
+    object_properties: BTreeSet<String>,
+    data_properties: BTreeSet<String>,
+    individuals: BTreeSet<String>,
+}
+
+fn named_individual_iri(i: &Individual<RcStr>) -> Option<String> {
+    match i {
+        Individual::Named(ni) => Some(ni.0.to_string()),
+        Individual::Anonymous(_) => None,
+    }
+}
+
+impl Declared {
+    fn of(onto: &SetOntology<RcStr>) -> Self {
+        let mut d = Declared {
+            classes: BUILTIN_CLASSES.iter().map(|s| (*s).to_string()).collect(),
+            object_properties: BUILTIN_OBJECT_PROPERTIES
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+            data_properties: BUILTIN_DATA_PROPERTIES
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+            individuals: BTreeSet::new(),
+        };
+
+        for ac in onto.iter() {
+            match &ac.component {
+                Component::DeclareClass(horned_owl::model::DeclareClass(Class(c))) => {
+                    d.classes.insert(c.to_string());
+                }
+                Component::DeclareObjectProperty(DeclareObjectProperty(ObjectProperty(op))) => {
+                    d.object_properties.insert(op.to_string());
+                }
+                Component::DeclareDataProperty(DeclareDataProperty(DataProperty(dp))) => {
+                    d.data_properties.insert(dp.to_string());
+                }
+                Component::DeclareNamedIndividual(horned_owl::model::DeclareNamedIndividual(
+                    ni,
+                )) => {
+                    d.individuals.insert(ni.0.to_string());
+                }
+                Component::ClassAssertion(horned_owl::model::ClassAssertion { i, .. }) => {
+                    d.individuals.extend(named_individual_iri(i));
+                }
+                Component::ObjectPropertyAssertion(
+                    horned_owl::model::ObjectPropertyAssertion { from, to, .. },
+                )
+                | Component::NegativeObjectPropertyAssertion(
+                    horned_owl::model::NegativeObjectPropertyAssertion { from, to, .. },
+                ) => {
+                    d.individuals.extend(named_individual_iri(from));
+                    d.individuals.extend(named_individual_iri(to));
+                }
+                Component::DataPropertyAssertion(horned_owl::model::DataPropertyAssertion {
+                    from,
+                    ..
+                })
+                | Component::NegativeDataPropertyAssertion(
+                    horned_owl::model::NegativeDataPropertyAssertion { from, .. },
+                ) => {
+                    d.individuals.extend(named_individual_iri(from));
+                }
+                Component::SameIndividual(horned_owl::model::SameIndividual(is))
+                | Component::DifferentIndividuals(horned_owl::model::DifferentIndividuals(is)) => {
+                    d.individuals
+                        .extend(is.iter().filter_map(named_individual_iri));
+                }
+                _ => {}
+            }
         }
-    });
+
+        d
+    }
+
+    fn check_class(&self, iri: &str, out: &mut Vec<String>) {
+        if !self.classes.contains(iri) {
+            out.push(format!("{iri} is not declared as a class in the ontology"));
+        }
+    }
+
+    fn check_individual(&self, iri: &str, out: &mut Vec<String>) {
+        if !self.individuals.contains(iri) {
+            out.push(format!(
+                "{iri} does not appear as an individual in the ontology"
+            ));
+        }
+    }
+
+    fn check_object_property_expression(
+        &self,
+        ope: &ObjectPropertyExpression<RcStr>,
+        out: &mut Vec<String>,
+    ) {
+        let (ObjectPropertyExpression::ObjectProperty(ObjectProperty(iri))
+        | ObjectPropertyExpression::InverseObjectProperty(ObjectProperty(iri))) = ope;
+        if !self.object_properties.contains(iri.as_ref()) {
+            out.push(format!(
+                "{iri} is not declared as an object property in the ontology"
+            ));
+        }
+    }
+
+    fn check_data_property(&self, dp: &DataProperty<RcStr>, out: &mut Vec<String>) {
+        if !self.data_properties.contains(dp.0.as_ref()) {
+            out.push(format!(
+                "{} is not declared as a data property in the ontology",
+                dp.0
+            ));
+        }
+    }
+
+    /// Walk `ce`, appending one message per undeclared term found. All
+    /// of them, not just the first: an author who mistyped two terms
+    /// should see both rather than play whack-a-mole.
+    fn check_class_expression(&self, ce: &ClassExpression<RcStr>, out: &mut Vec<String>) {
+        match ce {
+            ClassExpression::Class(Class(iri)) => self.check_class(iri.as_ref(), out),
+            ClassExpression::ObjectIntersectionOf(v) | ClassExpression::ObjectUnionOf(v) => {
+                for inner in v {
+                    self.check_class_expression(inner, out);
+                }
+            }
+            ClassExpression::ObjectComplementOf(b) => self.check_class_expression(b, out),
+            ClassExpression::ObjectOneOf(is) => {
+                for i in is {
+                    if let Some(iri) = named_individual_iri(i) {
+                        self.check_individual(&iri, out);
+                    }
+                }
+            }
+            ClassExpression::ObjectSomeValuesFrom { ope, bce }
+            | ClassExpression::ObjectAllValuesFrom { ope, bce }
+            | ClassExpression::ObjectMinCardinality { ope, bce, .. }
+            | ClassExpression::ObjectMaxCardinality { ope, bce, .. }
+            | ClassExpression::ObjectExactCardinality { ope, bce, .. } => {
+                self.check_object_property_expression(ope, out);
+                self.check_class_expression(bce, out);
+            }
+            ClassExpression::ObjectHasValue { ope, i } => {
+                self.check_object_property_expression(ope, out);
+                if let Some(iri) = named_individual_iri(i) {
+                    self.check_individual(&iri, out);
+                }
+            }
+            ClassExpression::ObjectHasSelf(ope) => {
+                self.check_object_property_expression(ope, out);
+            }
+            ClassExpression::DataSomeValuesFrom { dp, .. }
+            | ClassExpression::DataAllValuesFrom { dp, .. }
+            | ClassExpression::DataHasValue { dp, .. }
+            | ClassExpression::DataMinCardinality { dp, .. }
+            | ClassExpression::DataMaxCardinality { dp, .. }
+            | ClassExpression::DataExactCardinality { dp, .. } => {
+                self.check_data_property(dp, out);
+            }
+        }
+    }
+}
+
+/// Fail loudly, naming every undeclared term, unless each class
+/// expression in `ces` (and each individual in `individuals`) refers
+/// only to terms the ontology declares. See the module doc for why a
+/// silent acceptance here is a green typo.
+fn require_declared_terms(
+    onto: &SetOntology<RcStr>,
+    ces: &[&ClassExpression<RcStr>],
+    individuals: &[&str],
+) -> Result<(), String> {
+    let declared = Declared::of(onto);
+    let mut problems = Vec::new();
+    for iri in individuals {
+        declared.check_individual(iri, &mut problems);
+    }
+    for ce in ces {
+        declared.check_class_expression(ce, &mut problems);
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems.join("; "))
+    }
+}
+
+/// Fail loudly unless `iri` is a declared (or builtin) class. The
+/// named-class counterpart of `require_declared_terms`, used by the
+/// Turtle claim arms that now reduce to a probe: the probe registers
+/// any IRI it is handed, so the `UnknownClass` error `is_subclass_of`
+/// and `is_instance_of` used to raise no longer happens by itself.
+fn require_declared_class(onto: &SetOntology<RcStr>, iri: &str) -> Result<(), String> {
+    let mut problems = Vec::new();
+    Declared::of(onto).check_class(iri, &mut problems);
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems.join("; "))
+    }
 }
 
 /// The one bounded-probe entry point in this module: define a fresh
@@ -327,6 +594,29 @@ fn entailed_via_satisfiability_probe(
     probe_satisfiable(onto, probe_definition, deadline).map(|sat| !sat)
 }
 
+/// Bounded check for "is named class `sub` subsumed by named class
+/// `sup`?". Exactly the reduction `is_subclass_of` performs
+/// internally (`sub ⊓ ¬sup` unsatisfiable), but routed through
+/// `probe_satisfiable` so it actually honours `deadline`; see the
+/// module doc. `require_declared_class` restores the `UnknownClass`
+/// guard that calling `is_subclass_of` used to provide for free.
+fn subsumes_via_probe(
+    onto: &SetOntology<RcStr>,
+    sub: &str,
+    sup: &str,
+    deadline: Duration,
+) -> Result<bool, OracleFailure> {
+    for iri in [sub, sup] {
+        require_declared_class(onto, iri).map_err(OracleFailure::Error)?;
+    }
+    let build: Build<RcStr> = Build::new();
+    let intersection = ClassExpression::ObjectIntersectionOf(vec![
+        ClassExpression::Class(build.class(sub)),
+        ClassExpression::ObjectComplementOf(Box::new(ClassExpression::Class(build.class(sup)))),
+    ]);
+    probe_satisfiable(onto, intersection, deadline).map(|sat| !sat)
+}
+
 /// Does the claim hold under the reasoner, using this module's
 /// default `REASONER_DEADLINE`?
 pub fn holds(onto: &SetOntology<RcStr>, claim: &Claim) -> Result<bool, OracleFailure> {
@@ -345,13 +635,12 @@ pub fn holds_with_deadline(
     deadline: Duration,
 ) -> Result<bool, OracleFailure> {
     match claim {
-        Claim::Subsumption { sub, sup } => owl_dl_reasoner::is_subclass_of(onto, sub, sup)
-            .map_err(|e| OracleFailure::Error(e.to_string())),
+        Claim::Subsumption { sub, sup } => subsumes_via_probe(onto, sub, sup, deadline),
         Claim::Equivalence { left, right } => {
-            let a = owl_dl_reasoner::is_subclass_of(onto, left, right)
-                .map_err(|e| OracleFailure::Error(e.to_string()))?;
-            let b = owl_dl_reasoner::is_subclass_of(onto, right, left)
-                .map_err(|e| OracleFailure::Error(e.to_string()))?;
+            // Both directions. A `||` here would report every one-way
+            // subsumption as an equivalence.
+            let a = subsumes_via_probe(onto, left, right, deadline)?;
+            let b = subsumes_via_probe(onto, right, left, deadline)?;
             Ok(a && b)
         }
         Claim::Unsatisfiable { class } => {
@@ -362,20 +651,18 @@ pub fn holds_with_deadline(
             }
         }
         Claim::ClassAssertion { individual, class } => {
-            // Does not honour `deadline`: see the module doc.
-            ensure_realize_deadline_set();
-            let start = Instant::now();
-            let result = owl_dl_reasoner::is_instance_of(onto, class, individual)
-                .map_err(|e| OracleFailure::Error(e.to_string()))?;
-            if !result && start.elapsed() >= REASONER_DEADLINE {
-                // is_instance_of's public API collapses a deadline
-                // expiry, a max-nodes trip, and a depth bail all to
-                // `false`, discarding which one happened. A `false`
-                // that took at least our own deadline is treated as
-                // that truncation, not a trustworthy negative.
-                return Err(OracleFailure::Timeout);
-            }
-            Ok(result)
+            // `is_instance_of` has no deadline parameter and collapses
+            // a truncation to a trustworthy-looking `false`; the probe
+            // answers the same question under a real deadline. See the
+            // module doc for the `unsafe set_var` this replaced.
+            require_declared_class(onto, class).map_err(OracleFailure::Error)?;
+            let build: Build<RcStr> = Build::new();
+            entailed_via_satisfiability_probe(
+                onto,
+                individual,
+                ClassExpression::Class(build.class(class.as_str())),
+                deadline,
+            )
         }
         Claim::ObjectPropertyAssertion {
             subject,
@@ -516,7 +803,7 @@ fn verdict_for(held: bool, expect: Expectation, what: &str) -> Verdict {
             Verdict::Fail(format!("expected NOT to hold, but it does: {what}"))
         }
         (false, Expectation::Entailed) => Verdict::Fail(format!(
-            "expected to hold, but no proof was found: {what}. \
+            "expected to hold, but {NO_PROOF_MARKER}: {what}. \
              Incompleteness is a possible cause; the CI differential settles it."
         )),
         (false, Expectation::NotEntailed) => Verdict::UnrefutedPass,
@@ -573,6 +860,13 @@ pub fn check_subsumption_expr(
         }
     };
 
+    if let Err(msg) = require_declared_terms(onto, &[&sub, &sup], &[]) {
+        return CheckOutcome {
+            name: what,
+            verdict: Verdict::Indeterminate(IndeterminateReason::OracleError(msg)),
+        };
+    }
+
     let intersection = ClassExpression::ObjectIntersectionOf(vec![
         sub,
         ClassExpression::ObjectComplementOf(Box::new(sup)),
@@ -616,6 +910,13 @@ pub fn check_instance_expr(
         }
     };
 
+    if let Err(msg) = require_declared_terms(onto, &[&ce], &[individual]) {
+        return CheckOutcome {
+            name: what,
+            verdict: Verdict::Indeterminate(IndeterminateReason::OracleError(msg)),
+        };
+    }
+
     let verdict = match entailed_via_satisfiability_probe(onto, individual, ce, deadline) {
         Ok(held) => verdict_for(held, expect, &what),
         Err(OracleFailure::Timeout) => Verdict::Indeterminate(IndeterminateReason::Timeout),
@@ -631,15 +932,39 @@ pub fn check_instance_expr(
 }
 
 /// Does `expr` have a model? Guards a pattern going unsatisfiable.
-/// `expect` follows the same `verdict_for` asymmetry as the other two
-/// checks: `Entailed` means "expect satisfiable" (the common case,
-/// e.g. guarding a competency-question pattern), `NotEntailed` means
-/// "expect unsatisfiable". A direct, always-expect-satisfiable claim
-/// about a *named* class already has a dedicated path
-/// (`Claim::Unsatisfiable`, via `holds`); this is for a raw Manchester
-/// expression with no class declaration behind it. `deadline` is the
-/// caller's time budget for this one check; see
+/// `expect` reads as the author writes it: `Entailed` means "expect
+/// satisfiable" (the common case, e.g. guarding a competency-question
+/// pattern), `NotEntailed` means "expect unsatisfiable". A direct,
+/// always-expect-satisfiable claim about a *named* class already has a
+/// dedicated path (`Claim::Unsatisfiable`, via `holds`); this is for a
+/// raw Manchester expression with no class declaration behind it.
+/// `deadline` is the caller's time budget for this one check; see
 /// `check_subsumption_expr`.
+///
+/// # Which side of this probe is provable
+///
+/// UNSAT is the trustworthy answer from `probe_satisfiable`: the
+/// reasoner found a clash, and soundness vouches for that. SAT is
+/// only "no clash was found", which a missed clash also produces. So
+/// the value and the expectation are both flipped into
+/// `verdict_for`'s contract, whose trustworthy slot is `held == true`:
+/// the probe's `!sat` (UNSAT, provable) is what goes in as `held`, and
+/// "expect satisfiable" becomes `NotEntailed`. Consequences, all
+/// intended:
+///
+/// * satisfiable as expected yields `UnrefutedPass`, not `Pass`: an
+///   honest, non-failing, separately-counted verdict resting on an
+///   absence of proof, and one `suite::downgrade_for_loss` already
+///   covers through its `UnrefutedPass` arm.
+/// * genuinely unsatisfiable when satisfiability was expected yields
+///   the trustworthy `Fail("expected NOT to hold, but it does")`,
+///   which the loss downgrade correctly leaves alone.
+///
+/// Passing `sat` raw instead (as an earlier revision did) put the
+/// untrusted direction in the trustworthy slot: a spuriously
+/// satisfiable expression reported a verified `Pass`, and a genuine
+/// unsatisfiability regression produced a `NO_PROOF_MARKER` Fail that
+/// `downgrade_for_loss` then demoted to `Indeterminate(AxiomLoss)`.
 pub fn check_satisfiable_expr(
     onto: &SetOntology<RcStr>,
     expr: &str,
@@ -658,8 +983,25 @@ pub fn check_satisfiable_expr(
         }
     };
 
+    if let Err(msg) = require_declared_terms(onto, &[&ce], &[]) {
+        return CheckOutcome {
+            name: what,
+            verdict: Verdict::Indeterminate(IndeterminateReason::OracleError(msg)),
+        };
+    }
+
+    // See this function's doc: UNSAT is the provable direction, so the
+    // value and the expectation are both flipped into `verdict_for`'s
+    // contract rather than `sat` being passed raw.
+    let flipped = match expect {
+        // "expect satisfiable" is an absence-of-proof expectation.
+        Expectation::Entailed => Expectation::NotEntailed,
+        // "expect unsatisfiable" is the provable one.
+        Expectation::NotEntailed => Expectation::Entailed,
+    };
+
     let verdict = match probe_satisfiable(onto, ce, deadline) {
-        Ok(sat) => verdict_for(sat, expect, &what),
+        Ok(sat) => verdict_for(!sat, flipped, &what),
         Err(OracleFailure::Timeout) => Verdict::Indeterminate(IndeterminateReason::Timeout),
         Err(OracleFailure::Error(msg)) => {
             Verdict::Indeterminate(IndeterminateReason::OracleError(msg))

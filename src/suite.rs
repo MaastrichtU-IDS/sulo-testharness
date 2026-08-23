@@ -24,7 +24,8 @@ use crate::claim::{Claim, parse_fragment};
 use crate::load::{load_file, merge};
 use crate::manifest::Case;
 use crate::oracle::{
-    Expectation, check, check_instance_expr, check_satisfiable_expr, check_subsumption_expr,
+    Expectation, NO_PROOF_MARKER, check, check_instance_expr, check_satisfiable_expr,
+    check_subsumption_expr,
 };
 use crate::prefixes::{self, base_mapping, with_overrides};
 use crate::verdict::{CheckOutcome, IndeterminateReason, Verdict, aggregate};
@@ -81,8 +82,11 @@ pub fn downgrade_for_loss(outcomes: &mut [CheckOutcome], loss: &[String]) {
         let untrusted = match (out.name.as_str(), &out.verdict) {
             // Rests on "no proof found".
             (_, Verdict::UnrefutedPass) => true,
-            // A positive expectation that found no proof.
-            (_, Verdict::Fail(msg)) if msg.contains("no proof was found") => true,
+            // A positive expectation that found no proof. Matched
+            // against `oracle::NO_PROOF_MARKER`, the same constant
+            // the message is built from, so editing the wording can
+            // never silently switch this downgrade off.
+            (_, Verdict::Fail(msg)) if msg.contains(NO_PROOF_MARKER) => true,
             // Gate expected inconsistency, found none: rests on
             // absence of a clash, exactly analogous to the two cases
             // above.
@@ -99,6 +103,31 @@ pub fn downgrade_for_loss(outcomes: &mut [CheckOutcome], loss: &[String]) {
 }
 
 /// Run one case end to end.
+///
+/// # The consistency gate is UNBOUNDED
+///
+/// Stated here rather than left to be rediscovered: the gate below
+/// calls `owl_dl_reasoner::is_consistent`, which at the pinned
+/// v0.4.22 has NO deadline-bearing variant (`is_consistent_with_stats`
+/// takes none either). So the gate cannot honour the case's
+/// `timeout_ms`, has no `Indeterminate(Timeout)` route, and a
+/// pathological ontology or data file blocks the whole suite. Every
+/// other reasoner call this crate makes is bounded (see `oracle`'s
+/// module doc); this one is the exception.
+///
+/// Expressing the gate as a bounded probe on `owl:Thing`
+/// satisfiability was tried and rejected. It agrees with
+/// `is_consistent` on every fixture in this repository, including the
+/// purely ABox-driven inconsistencies, but it is not a
+/// proven-equivalent oracle: `is_class_satisfiable_with_timeout` skips
+/// the two ABox pre-checks `is_consistent` runs
+/// (`abox_saturation_inconsistent` and `abox_verdict`) and
+/// short-circuits to `Ok(Some(true))` on a pure-EL ontology. Trading
+/// an unbounded gate for a gate that might MISS an inconsistency is
+/// strictly the worse deal: a missed inconsistency makes every check
+/// below pass vacuously, which is the exact failure this gate exists
+/// to prevent. Revisit when rustdl exposes a deadline on
+/// `is_consistent`, not before.
 pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
     let mut checks = Vec::new();
 
@@ -159,7 +188,10 @@ pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
 
     // Gate: consistency before anything else. An inconsistent
     // ontology entails everything, so any check run against one would
-    // be a meaningless pass.
+    // be a meaningless pass. This call is unbounded and ignores
+    // `deadline`: see this function's doc comment for why, and for why
+    // the obvious bounded substitute was rejected rather than
+    // overlooked.
     let consistent = match owl_dl_reasoner::is_consistent(&onto) {
         Ok(c) => c,
         Err(e) => {
@@ -224,6 +256,27 @@ pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
     ] {
         if let Some(text) = fragment {
             match parse_fragment(text, &pm) {
+                // A fragment that parses to ZERO claims is a case that
+                // asserts nothing while reporting a confident green:
+                // `entails: |` holding only whitespace or a `#`
+                // comment is valid Turtle producing no triples, so the
+                // loop below would push no checks and `aggregate`
+                // would return Pass over an empty set. Surface it as
+                // the configuration error it is. `manifest::load_case`
+                // catches the coarser form of the same mistake (no
+                // assertion field at all).
+                Ok(claims) if claims.is_empty() => checks.push(CheckOutcome {
+                    name: "empty fragment".into(),
+                    verdict: Verdict::Indeterminate(IndeterminateReason::OracleError(format!(
+                        "the {} fragment parsed to zero claims, so this case would \
+                         assert nothing and still report a pass; it is empty or \
+                         contains only comments",
+                        match expect {
+                            Expectation::Entailed => "entails",
+                            Expectation::NotEntailed => "not_entails",
+                        }
+                    ))),
+                }),
                 Ok(claims) => {
                     for claim in &claims {
                         checks.push(check(&onto, claim, expect, deadline));

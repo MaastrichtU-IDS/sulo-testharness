@@ -32,3 +32,37 @@ fn an_unknown_key_is_rejected_loudly() {
         "the error should name the offending key, got: {err}"
     );
 }
+
+#[test]
+fn a_case_that_asserts_nothing_is_rejected() {
+    // `deny_unknown_fields` catches `entials:`; this catches the other
+    // way to arrive at the same place, a manifest with only `id` and
+    // `description`. Such a case parses, pushes zero checks, and
+    // `aggregate` returns Pass over the empty set: a green for a test
+    // that tests nothing, which manifest.rs's own module doc calls the
+    // single worst failure mode available to a test harness.
+    let err = load_case(Path::new("tests/fixtures/case-no-assertions.yaml"))
+        .expect_err("a case with no assertion field must be an error");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("asserts nothing"),
+        "the error should say the case asserts nothing, got: {msg}"
+    );
+    assert!(
+        msg.contains("entails") && msg.contains("expect_inconsistent"),
+        "the error should list the fields that would make it a real case, got: {msg}"
+    );
+}
+
+#[test]
+fn expect_inconsistent_alone_is_a_real_case() {
+    // The consistency gate IS the assertion when
+    // `expect_inconsistent: true`, so such a case must survive the
+    // no-assertions check. Guards against the fix over-rejecting.
+    let c = load_case(Path::new(
+        "tests/fixtures/case-expect-inconsistent-only.yaml",
+    ))
+    .expect("expect_inconsistent alone is a complete case");
+    assert!(c.expect_inconsistent);
+    assert!(c.entails.is_none());
+}

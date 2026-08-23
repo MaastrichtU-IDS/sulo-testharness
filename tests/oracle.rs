@@ -11,10 +11,27 @@ use sulo_testharness::verdict::Verdict;
 const SULO: &str = "../sulo/sulo.ttl";
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 
+/// Real SULO, loaded with an explicit prerequisite check.
+///
+/// Every test here reads `../sulo/sulo.ttl` by relative path, so a
+/// checkout without the sulo repo as a sibling directory would
+/// otherwise panic on `.unwrap()` with a bare `Io` error that reads
+/// like a harness bug. `mutants/regenerate.sh` already guards the same
+/// prerequisite with an explicit message; this is that message.
+fn sulo_ontology() -> horned_owl::ontology::set::SetOntology<horned_owl::model::RcStr> {
+    assert!(
+        Path::new(SULO).is_file(),
+        "{SULO} not found. These tests read real SULO by relative path, so the \
+         sulo repo must be checked out as a sibling of sulo-testharness \
+         (the same prerequisite mutants/regenerate.sh checks for)."
+    );
+    load_file(Path::new(SULO))
+        .expect("real SULO should load")
+        .ontology
+}
+
 fn parts_ontology() -> horned_owl::ontology::set::SetOntology<horned_owl::model::RcStr> {
-    let mut base = load_file(Path::new(SULO))
-        .expect("SULO should load")
-        .ontology;
+    let mut base = sulo_ontology();
     let data = load_file(Path::new("tests/fixtures/parts.ttl"))
         .expect("parts fixture should load")
         .ontology;
@@ -82,7 +99,7 @@ fn class_assertion_uses_the_full_closure_not_most_specific_types() {
 
 #[test]
 fn the_deep_subsumption_chain_closes() {
-    let onto = load_file(Path::new(SULO)).unwrap().ontology;
+    let onto = sulo_ontology();
     let claim = Claim::Subsumption {
         sub: "https://w3id.org/sulo/StartTime".into(),
         sup: "https://w3id.org/sulo/Object".into(),
@@ -92,7 +109,7 @@ fn the_deep_subsumption_chain_closes() {
 
 #[test]
 fn a_known_non_subsumption_does_not_hold() {
-    let onto = load_file(Path::new(SULO)).unwrap().ontology;
+    let onto = sulo_ontology();
     let claim = Claim::Subsumption {
         sub: "https://w3id.org/sulo/Process".into(),
         sup: "https://w3id.org/sulo/Object".into(),
@@ -105,7 +122,7 @@ fn a_known_non_subsumption_does_not_hold() {
 
 #[test]
 fn expectation_entailed_and_holding_is_a_trustworthy_pass() {
-    let onto = load_file(Path::new(SULO)).unwrap().ontology;
+    let onto = sulo_ontology();
     let claim = Claim::Subsumption {
         sub: "https://w3id.org/sulo/Role".into(),
         sup: "https://w3id.org/sulo/Feature".into(),
@@ -118,7 +135,7 @@ fn expectation_entailed_and_holding_is_a_trustworthy_pass() {
 
 #[test]
 fn expectation_not_entailed_and_not_holding_is_only_unrefuted() {
-    let onto = load_file(Path::new(SULO)).unwrap().ontology;
+    let onto = sulo_ontology();
     let claim = Claim::Subsumption {
         sub: "https://w3id.org/sulo/Process".into(),
         sup: "https://w3id.org/sulo/Object".into(),
@@ -132,7 +149,7 @@ fn expectation_not_entailed_and_not_holding_is_only_unrefuted() {
 
 #[test]
 fn expectation_not_entailed_but_holding_is_a_trustworthy_fail() {
-    let onto = load_file(Path::new(SULO)).unwrap().ontology;
+    let onto = sulo_ontology();
     let claim = Claim::Subsumption {
         sub: "https://w3id.org/sulo/Role".into(),
         sup: "https://w3id.org/sulo/Feature".into(),
@@ -182,7 +199,7 @@ fn plain_string_literal_round_trips() {
 
 #[test]
 fn annotation_property_predicate_is_rejected() {
-    let onto = load_file(Path::new(SULO)).unwrap().ontology;
+    let onto = sulo_ontology();
     let claim = Claim::ObjectPropertyAssertion {
         subject: "https://w3id.org/sulo/Role".into(),
         property: "http://purl.org/dc/terms/title".into(),
@@ -199,7 +216,7 @@ fn annotation_property_predicate_is_rejected() {
 
 #[test]
 fn undeclared_predicate_is_rejected() {
-    let onto = load_file(Path::new(SULO)).unwrap().ontology;
+    let onto = sulo_ontology();
     let claim = Claim::DataPropertyAssertion {
         subject: "https://w3id.org/sulo/Role".into(),
         property: "http://www.w3.org/2000/01/rdf-schema#label".into(),
@@ -315,8 +332,11 @@ fn equivalence_requires_both_directions_not_just_one() {
 
 #[test]
 fn unsatisfiable_sign_is_not_flipped() {
-    // A sign flip on `.map(|sat| !sat)` would invert every verdict:
-    // unsatisfiable classes would read as fine, and vice versa.
+    // `Claim::Unsatisfiable` maps the probe's `sat` to `!sat` inline in
+    // its own dispatch arm (it queries the named class directly rather
+    // than going through `probe_satisfiable`). A sign flip there would
+    // invert every verdict: unsatisfiable classes would read as fine,
+    // and vice versa.
     let onto = parts_ontology();
 
     let genuinely_unsatisfiable = Claim::Unsatisfiable {

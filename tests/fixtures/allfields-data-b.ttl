@@ -1,0 +1,6 @@
+# Second element of the `data:` LIST. See allfields-data-a.ttl.
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix ex:  <http://example.org/> .
+
+ex:i2 a owl:NamedIndividual, ex:C .
+ex:i1 ex:p ex:i2 .

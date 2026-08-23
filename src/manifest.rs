@@ -24,6 +24,12 @@ pub enum ManifestError {
     },
     #[error("manifest {path} has an empty id")]
     EmptyId { path: PathBuf },
+    #[error(
+        "manifest {path} asserts nothing: set at least one of entails, not_entails, \
+         entails_manchester, not_entails_manchester, instance_of_expr, satisfiable_expr, \
+         unsatisfiable, or expect_inconsistent: true"
+    )]
+    NoAssertions { path: PathBuf },
 }
 
 /// One or many, so `data:` accepts a string or a list.
@@ -100,19 +106,46 @@ struct RawCase {
 #[derive(Debug)]
 pub struct Case {
     pub id: String,
+    /// Prose for the reader. Parsed and carried, but nothing in the
+    /// harness reads it; it is not part of any verdict or report line.
     pub description: String,
     pub ontology: Option<PathBuf>,
     pub imports: Vec<PathBuf>,
     pub data: Vec<PathBuf>,
     pub prefixes: BTreeMap<String, String>,
     pub expect_inconsistent: bool,
+    /// A Turtle fragment whose every triple must be entailed.
+    ///
+    /// KNOWN LIMITATION, pinned reasoner v0.4.22: a language-tagged
+    /// literal here can NEVER succeed. rustdl cannot positively
+    /// confirm `rdf:langString` `DataHasValue` membership by any path
+    /// (neither the materialised `inferred_data_property_values`,
+    /// which drops the language tag entirely, nor the bounded
+    /// satisfiability probe, nor the retired unbounded
+    /// `class_expression_instances`), even for an individual with that
+    /// exact literal asserted directly. So `ex:n sulo:hasValue
+    /// "bonjour"@fr .` under `entails:` is a permanent Fail (or, with
+    /// any axiom loss present, a permanent Indeterminate), not an
+    /// ontology defect. Assert such a value under `not_entails:` if it
+    /// must be mentioned at all, and expect `UnrefutedPass`.
     pub entails: Option<String>,
+    /// A Turtle fragment whose every triple must NOT be entailed.
+    /// Satisfying this yields `UnrefutedPass`, never `Pass`: the
+    /// reasoner is incomplete, so it only failed to refute the
+    /// negative. See `entails` for the `rdf:langString` limitation,
+    /// which applies to this field too (a language-tagged literal here
+    /// always "passes", unrefuted, for a reason unrelated to the
+    /// ontology).
     pub not_entails: Option<String>,
     pub entails_manchester: Vec<SubsumptionExpr>,
     pub not_entails_manchester: Vec<SubsumptionExpr>,
     pub instance_of_expr: Vec<InstanceExpr>,
     pub satisfiable_expr: Vec<String>,
     pub unsatisfiable: Vec<String>,
+    /// Free-form labels. Parsed and carried, but nothing reads them
+    /// yet: the `--tag` case filter is deferred, so a tag today is
+    /// documentation for a human reader, not a selector. Recorded here
+    /// so the field does not read as working machinery.
     pub tags: Vec<String>,
     /// The per-case reasoner time budget, in milliseconds, used as
     /// the `deadline` for every check `run_case` makes on this case's
@@ -140,6 +173,27 @@ pub fn load_case(path: &Path) -> Result<Case, ManifestError> {
 
     if raw.id.trim().is_empty() {
         return Err(ManifestError::EmptyId {
+            path: path.to_path_buf(),
+        });
+    }
+
+    // A case with `id` and `description` and nothing else parses
+    // perfectly well and then reports Pass over an empty check set:
+    // the same "confident green for a check that never ran" failure
+    // `deny_unknown_fields` exists to stop, arrived at from the other
+    // direction. `expect_inconsistent: true` counts as an assertion
+    // (the consistency gate is then the whole test); the default
+    // `false` does not.
+    let asserts_something = raw.expect_inconsistent
+        || raw.entails.is_some()
+        || raw.not_entails.is_some()
+        || !raw.entails_manchester.is_empty()
+        || !raw.not_entails_manchester.is_empty()
+        || !raw.instance_of_expr.is_empty()
+        || !raw.satisfiable_expr.is_empty()
+        || !raw.unsatisfiable.is_empty();
+    if !asserts_something {
+        return Err(ManifestError::NoAssertions {
             path: path.to_path_buf(),
         });
     }

@@ -18,7 +18,13 @@ description = "Regression and competency-question test harness for the SULO onto
 # because owl-dl-reasoner's own crates.io reference is untouched, and
 # `SetOntology` then becomes two incompatible types.
 horned-owl = { version = "1.4", default-features = false }
-owl-dl-reasoner = { git = "https://github.com/MaastrichtU-IDS/rustdl", tag = "v0.4.22" }
+# Pinned by REV, not by tag: a git tag is movable, so `tag = "v0.4.22"` could
+# silently resolve to different code tomorrow, which for an oracle whose exact
+# strength is baked into `suites/sulo.golden` is a correctness problem, not a
+# hygiene one. This is the rev v0.4.22 pointed at, and the same form the
+# [patch.crates-io] entry below already uses. Bumping it means also editing
+# `golden::REASONER_VERSION` in the same commit; see that constant's doc.
+owl-dl-reasoner = { git = "https://github.com/MaastrichtU-IDS/rustdl", rev = "a2acc23a9909c4f106886d246e755ede9fa05d9a" }
 oxrdfio = "0.2.0"
 oxrdf = "0.3.0"
 curie = "0.1"

@@ -196,6 +196,25 @@ on them rather than on a flag.
 axiom or incomplete parse that could bear on this specific query. It is no
 longer triggered by the `incomplete` flag, so it should be rare and stays red.
 
+**`satisfiable_expr` sits on the unprovable side of this table, and reports as
+such.** The probe behind it answers "is this expression UNsatisfiable?", and
+UNSAT is its only trustworthy answer: SAT is what a missed clash also produces.
+So a `satisfiable_expr` that is satisfiable as expected reports **Pass
+(unrefuted)**, not Pass, and a `satisfiable_expr` that turns out unsatisfiable
+reports a trustworthy **Fail**. An earlier implementation had these the other
+way round, which made a spuriously-satisfiable expression a verified Pass and
+made a genuine unsatisfiability regression carry the "no proof was found" marker
+that the axiom-loss downgrade then demoted to Indeterminate.
+
+**An undeclared term in a class expression is a configuration error, not a
+verdict.** Manchester parsing never consults the ontology, and rustdl's
+conversion registers any IRI that appears in an axiom whether declared or not,
+so `sulo:Featuer` would silently become a fresh unconstrained class: trivially
+satisfiable, trivially not subsumed, hence green for a typo. All three
+class-expression checks reject any class, object property, data property or
+individual the ontology does not declare, as `Indeterminate` naming the term.
+This is the same guard already applied to Turtle-fragment predicates.
+
 ### 5.2 Golden closure diff
 
 The primary defence for the untrusted direction, and the reason the design does
@@ -452,6 +471,38 @@ cq:
 tags: [pattern, pro]
 timeout_ms: 30000
 ```
+
+Everything past `id` and `description` is optional, but a case must assert
+*something*: at least one of `entails`, `not_entails`, `entails_manchester`,
+`not_entails_manchester`, `instance_of_expr`, `satisfiable_expr`,
+`unsatisfiable`, or `expect_inconsistent: true`. A manifest with only `id` and
+`description` is rejected (`ManifestError::NoAssertions`), and an `entails:`
+block that parses to zero triples (empty, or only comments) is reported as
+`Indeterminate`. Both are the same failure `deny_unknown_fields` guards against,
+reached from a different direction: a case that asserts nothing otherwise
+reports a confident green.
+
+`tags` is parsed and carried but nothing reads it yet: the `--tag` case filter
+is deferred. A tag today is documentation, not a selector.
+
+**Known limitation, pinned reasoner v0.4.22: a language-tagged literal in
+`entails` can never succeed.** rustdl cannot positively confirm
+`rdf:langString` `DataHasValue` membership by *any* path, verified against real
+SULO: not the materialised `inferred_data_property_values` (which drops the
+language tag entirely), not the bounded satisfiability probe, and not the
+retired unbounded `class_expression_instances`, even for an individual with that
+exact literal asserted directly. So
+
+```yaml
+entails: |
+  ex:n sulo:hasValue "bonjour"@fr .
+```
+
+is a permanent `Fail` (or, wherever any axiom loss is present, a permanent
+`Indeterminate`), and no change to the ontology can fix it. This is a reasoner
+completeness gap, not a SULO defect. Assert such a value under `not_entails` if
+it must be mentioned at all, and expect `Pass (unrefuted)`. The same note lives
+on `manifest::Case::entails` so an author reading the code hits it too.
 
 ### 7.1 Why `entails_manchester` changed shape
 
@@ -827,7 +878,23 @@ default and local path.
   from `timeout_ms`, defaulting to 30000.
 - An inconsistent ontology where consistency was expected reports the clashing
   axiom set via rustdl's `justify`, so the failure is actionable rather than
-  just red.
+  just red. **NOT IMPLEMENTED, deferred.** The gate reports the unexpected
+  inconsistency, names the case, and states that every check below it would have
+  passed vacuously, but it does not call `justify` and does not print a clashing
+  axiom set. Recorded here rather than left as a promise the code does not keep;
+  closing it belongs in the follow-on plan alongside the deferred golden-closure
+  components of 5.2.
+- **The consistency gate is unbounded.** `owl_dl_reasoner::is_consistent` has no
+  deadline-bearing variant at v0.4.22 (`is_consistent_with_stats` takes none
+  either), so the gate cannot honour `timeout_ms`, has no `Indeterminate`
+  timeout route, and a pathological case blocks the suite. Every other reasoner
+  call the harness makes is bounded. Expressing the gate as a bounded
+  `owl:Thing`-satisfiability probe was tried and rejected: it agrees with
+  `is_consistent` on every fixture in the repository, but
+  `is_class_satisfiable_with_timeout` skips the two ABox pre-checks
+  `is_consistent` runs and short-circuits to "satisfiable" on a pure-EL
+  ontology, so substituting it risks a gate that MISSES an inconsistency, which
+  is strictly worse than one that can hang. See `suite::run_case`'s doc comment.
 
 ## 13. Design validation
 

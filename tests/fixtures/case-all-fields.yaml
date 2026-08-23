@@ -1,0 +1,38 @@
+# One case exercising every manifest field that `run_case` wires but
+# that nothing previously reached end to end: imports, not_entails,
+# not_entails_manchester, instance_of_expr, satisfiable_expr,
+# unsatisfiable, and `data:` given as a LIST (OneOrMany::Many).
+# tests/suite.rs asserts a verdict PER CHECK, not just the aggregate,
+# so a polarity error in any single field is caught rather than
+# absorbed.
+id: all-fields
+description: Every wired manifest field, exercised through run_case.
+ontology: allfields-onto.ttl
+imports: allfields-import.ttl
+data:
+  - allfields-data-a.ttl
+  - allfields-data-b.ttl
+prefixes:
+  ex: http://example.org/
+entails: |
+  ex:i1 a ex:A .
+not_entails: |
+  ex:i2 a ex:A .
+entails_manchester:
+  - sub_expr: "ex:B"
+    sup_expr: "ex:A"
+not_entails_manchester:
+  - sub_expr: "ex:A"
+    sup_expr: "ex:B"
+instance_of_expr:
+  - individual: "http://example.org/i1"
+    expr: "ex:A and ex:p some ex:C"
+satisfiable_expr:
+  - "ex:A and ex:p some ex:C"
+unsatisfiable:
+  - "ex:Bad"
+  # A deliberately unbound prefix. The expansion error must surface as
+  # Indeterminate(OracleError), never fall back to the raw token: that
+  # would ask the reasoner about an IRI the author never wrote.
+  - "nosuch:Whatever"
+tags: [fixture, all-fields]

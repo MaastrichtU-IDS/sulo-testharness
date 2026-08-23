@@ -6,6 +6,25 @@ use sulo_testharness::load::load_file;
 const SULO: &str = "../sulo/sulo.ttl";
 const MUTANT: &str = "mutants/no-subproperty-containment.ttl";
 
+/// Real SULO, loaded with an explicit prerequisite check.
+///
+/// Every test here reads `../sulo/sulo.ttl` by relative path, so a
+/// checkout without the sulo repo as a sibling directory would
+/// otherwise panic on `.unwrap()` with a bare `Io` error that reads
+/// like a harness bug. `mutants/regenerate.sh` already guards the same
+/// prerequisite with an explicit message; this is that message.
+fn sulo_ontology() -> horned_owl::ontology::set::SetOntology<horned_owl::model::RcStr> {
+    assert!(
+        Path::new(SULO).is_file(),
+        "{SULO} not found. These tests read real SULO by relative path, so the \
+         sulo repo must be checked out as a sibling of sulo-testharness \
+         (the same prerequisite mutants/regenerate.sh checks for)."
+    );
+    load_file(Path::new(SULO))
+        .expect("real SULO should load")
+        .ontology
+}
+
 /// A process-and-test-unique scratch path so parallel test threads
 /// never collide on the same golden file.
 fn scratch_golden(name: &str) -> PathBuf {
@@ -17,7 +36,7 @@ fn scratch_golden(name: &str) -> PathBuf {
 
 #[test]
 fn the_closure_is_deterministic() {
-    let onto = load_file(Path::new(SULO)).unwrap().ontology;
+    let onto = sulo_ontology();
     let a = closure(&onto).unwrap();
     let b = closure(&onto).unwrap();
     assert_eq!(a, b, "closure must be byte-identical across runs");
@@ -25,7 +44,7 @@ fn the_closure_is_deterministic() {
 
 #[test]
 fn the_closure_is_sorted() {
-    let onto = load_file(Path::new(SULO)).unwrap().ontology;
+    let onto = sulo_ontology();
     let text = closure(&onto).unwrap();
     let body: Vec<&str> = text.lines().filter(|l| !l.starts_with('#')).collect();
     let mut sorted = body.clone();
@@ -38,7 +57,7 @@ fn the_closure_is_sorted() {
 
 #[test]
 fn the_closure_records_known_entailments() {
-    let onto = load_file(Path::new(SULO)).unwrap().ontology;
+    let onto = sulo_ontology();
     let text = closure(&onto).unwrap();
     assert!(
         text.contains("subClassOf\thttps://w3id.org/sulo/StartTime\thttps://w3id.org/sulo/Object"),
@@ -68,7 +87,7 @@ fn a_changed_closure_reports_the_lines() {
 fn dropping_an_axiom_changes_the_closure() {
     // The mechanism the golden file exists for: a regression that no
     // hand-written case asserts still shows up as drift.
-    let clean = closure(&load_file(Path::new(SULO)).unwrap().ontology).unwrap();
+    let clean = closure(&sulo_ontology()).unwrap();
     let mutant = closure(&load_file(Path::new(MUTANT)).unwrap().ontology).unwrap();
     assert_ne!(
         clean, mutant,
@@ -85,7 +104,7 @@ fn check_golden_writes_and_then_matches() {
     // would let `check_golden`'s Drift arm go completely untested if
     // this test, and the one below, did not exist.
     let path = scratch_golden("writes-and-matches");
-    let onto = load_file(Path::new(SULO)).unwrap().ontology;
+    let onto = sulo_ontology();
 
     let wrote = check_golden(&onto, &path, true);
     assert_eq!(wrote, GoldenOutcome::Rebaselined);
@@ -101,7 +120,7 @@ fn check_golden_reports_drift_for_a_real_mutant() {
     // The end-to-end mechanism the golden file exists for, exercised
     // through `check_golden` itself rather than only through `diff`.
     let path = scratch_golden("drift-for-mutant");
-    let clean = load_file(Path::new(SULO)).unwrap().ontology;
+    let clean = sulo_ontology();
     let mutant = load_file(Path::new(MUTANT)).unwrap().ontology;
 
     let wrote = check_golden(&clean, &path, true);
@@ -140,7 +159,7 @@ fn check_golden_requires_rebaseline_on_reasoner_version_mismatch() {
     )
     .unwrap();
 
-    let onto = load_file(Path::new(SULO)).unwrap().ontology;
+    let onto = sulo_ontology();
     match check_golden(&onto, &path, false) {
         GoldenOutcome::RebaselineRequired(m) => {
             assert!(
@@ -163,7 +182,7 @@ fn check_golden_requires_rebaseline_when_header_is_missing() {
     let path = scratch_golden("missing-header");
     std::fs::write(&path, "satisfiable\tx\ttrue\n").unwrap();
 
-    let onto = load_file(Path::new(SULO)).unwrap().ontology;
+    let onto = sulo_ontology();
     assert!(
         matches!(
             check_golden(&onto, &path, false),
@@ -184,7 +203,7 @@ fn check_golden_errors_without_writing_when_no_golden_file_exists_and_accept_is_
     let path = scratch_golden("missing-file-no-accept");
     let _ = std::fs::remove_file(&path); // ensure it truly does not exist
 
-    let onto = load_file(Path::new(SULO)).unwrap().ontology;
+    let onto = sulo_ontology();
     match check_golden(&onto, &path, false) {
         GoldenOutcome::Error(m) => {
             assert!(
@@ -218,7 +237,7 @@ fn check_golden_requires_rebaseline_on_completeness_mismatch() {
     )
     .unwrap();
 
-    let onto = load_file(Path::new(SULO)).unwrap().ontology;
+    let onto = sulo_ontology();
     // Real SULO is out-of-fragment, so its actual completeness_guaranteed
     // is false; the fixture above deliberately claims true, to differ.
     match check_golden(&onto, &path, false) {
@@ -246,12 +265,13 @@ fn the_committed_golden_file_matches_clean_sulo() {
     // ontology and so cannot see load-path or cross-process
     // variation; this test goes through the real committed file on
     // disk, the same path an operator's `cargo run -- golden` takes.
-    let onto = load_file(Path::new(SULO)).unwrap().ontology;
+    let onto = sulo_ontology();
     let outcome = check_golden(&onto, Path::new("suites/sulo.golden"), false);
     assert_eq!(
         outcome,
         GoldenOutcome::Match,
-        "the committed suites/sulo.golden must match current SULO's closure;          if SULO changed deliberately, regenerate it with --accept-golden"
+        "the committed suites/sulo.golden must match current SULO's closure. \
+         If SULO changed deliberately, regenerate it with --accept-golden"
     );
 }
 
@@ -262,7 +282,7 @@ fn the_closure_records_completeness_and_undecided_pairs() {
     // must carry the completeness flag, and any undecided pair must
     // be visible in the body so drift in the oracle's reach is caught
     // like any other drift.
-    let onto = load_file(Path::new(SULO)).unwrap().ontology;
+    let onto = sulo_ontology();
     let text = closure(&onto).unwrap();
     assert!(
         text.lines()

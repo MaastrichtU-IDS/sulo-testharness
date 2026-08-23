@@ -44,6 +44,23 @@ use sulo_testharness::verdict::Verdict;
 
 const CLEAN: &str = "../sulo/sulo.ttl";
 
+/// `CLEAN`, checked to exist first.
+///
+/// These tests read real SULO by relative path, so a checkout without
+/// the sulo repo as a sibling directory would otherwise fail deep
+/// inside `run_case` or on a bare `.expect()` with an `Io` error that
+/// reads like a harness bug. `mutants/regenerate.sh` guards the same
+/// prerequisite with an explicit message; this is that message.
+fn clean_sulo() -> &'static Path {
+    assert!(
+        Path::new(CLEAN).is_file(),
+        "{CLEAN} not found. These tests compare against real SULO, so the sulo \
+         repo must be checked out as a sibling of sulo-testharness (the same \
+         prerequisite mutants/regenerate.sh checks for)."
+    );
+    Path::new(CLEAN)
+}
+
 fn verdict_of(case_file: &str, ontology: &Path) -> Verdict {
     let case = load_case(Path::new(case_file)).expect("case should parse");
     run_case(&case, ontology).verdict
@@ -52,10 +69,15 @@ fn verdict_of(case_file: &str, ontology: &Path) -> Verdict {
 fn assert_caught(mutant: &str, case_file: &str) {
     let mutant_path = PathBuf::from("mutants").join(mutant);
 
-    let clean = verdict_of(case_file, Path::new(CLEAN));
-    assert!(
-        matches!(clean, Verdict::Pass | Verdict::UnrefutedPass),
-        "{case_file} must pass on clean SULO, got {clean:?}"
+    let clean = verdict_of(case_file, clean_sulo());
+    assert_eq!(
+        clean,
+        Verdict::Pass,
+        "{case_file} must pass on clean SULO with a TRUSTWORTHY Pass. All four
+         proof cases assert positive entailments only, so an UnrefutedPass here
+         would itself be the defect: it would mean the proof this mutant is
+         supposed to break was never found in the first place, and the mutant's
+         Fail below would be proving nothing."
     );
 
     let mutated = verdict_of(case_file, &mutant_path);
@@ -210,7 +232,7 @@ type StalenessCase = (&'static str, fn(&str) -> String);
 
 #[test]
 fn mutants_are_not_stale_against_current_sulo() {
-    let sulo = std::fs::read_to_string(CLEAN).expect("real SULO should be readable");
+    let sulo = std::fs::read_to_string(clean_sulo()).expect("real SULO should be readable");
 
     let cases: [StalenessCase; 4] = [
         ("no-role-chain.ttl", expected_no_role_chain),

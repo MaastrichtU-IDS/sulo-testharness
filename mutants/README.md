@@ -1,7 +1,12 @@
 # Mutants
 
 Each `no-*.ttl` file is real, unmodified `../sulo/sulo.ttl` with exactly
-one axiom concept removed or weakened. `tests/mutation.rs` asserts
+one axiom CONCEPT removed or weakened. "Concept", not "axiom": two of
+the four mutants remove BOTH halves of an inverse pair, because
+removing only one half is semantically inert (the untouched half plus
+the `owl:inverseOf` link fully re-derives the conclusion). See
+`no-transitive-parthood.ttl` and `no-subproperty-containment.ttl`
+below for the empirical traces. `tests/mutation.rs` asserts
 that every mutant is caught by a specific named case, and that the
 same case passes on clean SULO.
 

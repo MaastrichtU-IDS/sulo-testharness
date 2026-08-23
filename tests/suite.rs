@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use sulo_testharness::load::load_file;
-use sulo_testharness::manifest::Case;
+use sulo_testharness::manifest::{Case, load_case};
 use sulo_testharness::suite::{downgrade_for_loss, run_case};
 use sulo_testharness::verdict::{CheckOutcome, IndeterminateReason, Verdict};
 
@@ -514,4 +514,178 @@ fn loss_beyond_the_baseline_still_downgrades() {
         "loss beyond the baseline must still downgrade a positive Fail, got {:?}",
         outs[0].verdict
     );
+}
+
+// ---------------------------------------------------------------
+// Every wired manifest field, end to end through `run_case`. Six of
+// them (imports, not_entails, not_entails_manchester,
+// instance_of_expr, satisfiable_expr, unsatisfiable) were reachable
+// only in principle before this: flipping
+// `not_entails_manchester`'s Expectation::NotEntailed to Entailed, or
+// reverting the `unsatisfiable` prefix-expansion error branch, broke
+// no test at all. Asserting PER CHECK rather than on the aggregate is
+// what makes a single field's polarity error visible.
+// ---------------------------------------------------------------
+
+fn check_named<'a>(result: &'a sulo_testharness::suite::CaseResult, needle: &str) -> &'a Verdict {
+    &result
+        .checks
+        .iter()
+        .find(|c| c.name.contains(needle))
+        .unwrap_or_else(|| {
+            panic!(
+                "no check whose name contains {needle:?}; checks were {:?}",
+                result.checks
+            )
+        })
+        .verdict
+}
+
+#[test]
+fn every_wired_manifest_field_is_exercised_end_to_end() {
+    let case = load_case(Path::new("tests/fixtures/case-all-fields.yaml"))
+        .expect("the all-fields fixture should parse");
+
+    // `data:` as a LIST: OneOrMany::Many, previously untested.
+    assert_eq!(case.data.len(), 2, "data: given as a list of two files");
+    assert_eq!(case.imports.len(), 1, "imports: is populated");
+
+    let result = run_case(&case, Path::new(UNUSED_DEFAULT));
+    assert!(
+        !result.skipped,
+        "the gate must pass so every field below actually runs, got {:?}",
+        result.checks
+    );
+    assert!(
+        result.baseline_loss.is_empty() && result.checks.len() >= 8,
+        "expected the gate plus one check per assertion, got {:?}",
+        result.checks
+    );
+
+    // entails and not_entails both classify as ClassAssertion claims.
+    // not_entails: ex:i2 is a C, and C is disjoint from A, so "i2 is
+    // an A" is not entailed. Unrefuted, never Pass.
+    let class_assertions: Vec<&Verdict> = result
+        .checks
+        .iter()
+        .filter(|c| c.name.contains("ClassAssertion"))
+        .map(|c| &c.verdict)
+        .collect();
+    assert_eq!(class_assertions.len(), 2, "entails plus not_entails");
+    assert!(
+        class_assertions.contains(&&Verdict::Pass)
+            && class_assertions.contains(&&Verdict::UnrefutedPass),
+        "the positive must be a trustworthy Pass and the negative only \
+         UnrefutedPass, got {class_assertions:?}"
+    );
+
+    // entails_manchester: B subsumed by A, provable.
+    assert_eq!(check_named(&result, "ex:B subClassOf ex:A"), &Verdict::Pass);
+
+    // not_entails_manchester: A is NOT subsumed by B. This is the
+    // check that catches a verdict-polarity flip: with
+    // Expectation::Entailed it would be a Fail instead.
+    assert_eq!(
+        check_named(&result, "ex:A subClassOf ex:B"),
+        &Verdict::UnrefutedPass,
+        "a negative subsumption expectation the reasoner failed to refute"
+    );
+
+    // instance_of_expr: i1 is an A (via B) that p-relates to i2, a C.
+    // Needs BOTH data files, so this also proves the list loaded.
+    assert_eq!(
+        check_named(&result, "instanceOf"),
+        &Verdict::Pass,
+        "membership in the composite expression is provable"
+    );
+
+    // satisfiable_expr: satisfiable, which is this probe's unprovable
+    // direction, hence UnrefutedPass. See check_satisfiable_expr.
+    assert_eq!(
+        check_named(&result, "satisfiable: ex:A"),
+        &Verdict::UnrefutedPass
+    );
+
+    // unsatisfiable: ex:Bad exists only in the imported file, so a Pass
+    // here is proof the imports channel loaded and merged.
+    assert_eq!(
+        check_named(&result, "Unsatisfiable"),
+        &Verdict::Pass,
+        "ex:Bad is under two disjoint classes; it lives only in the import"
+    );
+
+    // unsatisfiable with an unbound prefix: surfaced as the PREFIX
+    // mistake it is, never silently retried against the raw,
+    // unexpanded token. Asserting on the message, not just the verdict
+    // kind: handing `nosuch:Whatever` to the reasoner verbatim also
+    // yields Indeterminate(OracleError), just with an unhelpful
+    // UnknownClass inside it, so only the message discriminates.
+    let bad_prefix = check_named(&result, "unsatisfiable: nosuch:Whatever");
+    let Verdict::Indeterminate(IndeterminateReason::OracleError(msg)) = bad_prefix else {
+        panic!("an unbound prefix is a configuration error, got {bad_prefix:?}");
+    };
+    assert!(
+        msg.contains("is not bound"),
+        "the error must name the unbound prefix rather than report a reasoner \
+         UnknownClass for a token the author never wrote, got: {msg}"
+    );
+}
+
+// ---------------------------------------------------------------
+// A fragment that parses to zero claims. Valid Turtle, no triples,
+// so the old code pushed no checks and `aggregate` returned Pass over
+// an empty set: the second route to a case that asserts nothing and
+// reports green.
+// ---------------------------------------------------------------
+
+#[test]
+fn an_entails_fragment_with_no_triples_is_indeterminate_not_a_pass() {
+    let mut case = base_case("empty-fragment");
+    case.ontology = Some(PathBuf::from("clean.ttl"));
+    case.entails = Some("  \n# only a comment\n  ".into());
+
+    let result = run_case(&case, Path::new(UNUSED_DEFAULT));
+
+    let empty = check_named(&result, "empty fragment");
+    assert!(
+        matches!(
+            empty,
+            Verdict::Indeterminate(IndeterminateReason::OracleError(_))
+        ),
+        "an empty fragment must be surfaced, got {empty:?}"
+    );
+    if let Verdict::Indeterminate(IndeterminateReason::OracleError(msg)) = empty {
+        assert!(
+            msg.contains("entails") && msg.contains("zero claims"),
+            "the message should name the field and say why, got: {msg}"
+        );
+    }
+    assert!(
+        matches!(result.verdict, Verdict::Indeterminate(_)),
+        "the case must not aggregate to Pass, got {:?}",
+        result.verdict
+    );
+}
+
+#[test]
+fn a_not_entails_fragment_with_no_triples_is_indeterminate_too() {
+    let mut case = base_case("empty-negative-fragment");
+    case.ontology = Some(PathBuf::from("clean.ttl"));
+    case.not_entails = Some("\n".into());
+
+    let result = run_case(&case, Path::new(UNUSED_DEFAULT));
+
+    if let Verdict::Indeterminate(IndeterminateReason::OracleError(msg)) =
+        check_named(&result, "empty fragment")
+    {
+        assert!(
+            msg.contains("not_entails"),
+            "the message should name the not_entails field, got: {msg}"
+        );
+    } else {
+        panic!(
+            "expected Indeterminate(OracleError), got {:?}",
+            result.checks
+        );
+    }
 }

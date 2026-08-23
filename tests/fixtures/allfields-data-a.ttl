@@ -1,0 +1,8 @@
+# First element of the `data:` LIST. Splitting the ABox over two files
+# is what exercises `manifest::OneOrMany::Many`; the individual typing
+# lives here and the property assertion in allfields-data-b.ttl, so a
+# case that loaded only one of them cannot satisfy instance_of_expr.
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix ex:  <http://example.org/> .
+
+ex:i1 a owl:NamedIndividual, ex:B .

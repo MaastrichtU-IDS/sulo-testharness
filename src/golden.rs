@@ -4,8 +4,13 @@
 //! to know absolute truth. That is why this works despite the
 //! reasoner being incomplete: both sides of the diff come from the
 //! same oracle at the same version, so whatever it cannot see is held
-//! constant and cancels out. It therefore guards every entailment in
-//! the closure, not only the ones somebody thought to assert.
+//! constant and cancels out. What it guards is exactly the surface
+//! enumerated under "What this closure can and cannot see" below, and
+//! no more: an earlier revision of this sentence claimed the closure
+//! guards "every entailment in the closure, not only the ones somebody
+//! thought to assert", which the spec has since retracted as false.
+//! Read that section for the measured number before relying on this
+//! file for anything.
 //!
 //! The header pins the reasoner version AND the completeness flag
 //! (see below). Either changing legitimately moves the closure, so
@@ -55,6 +60,16 @@
 //! properties appears in any class-defining restriction in SULO; the
 //! drift is visible only in the property hierarchy.
 //!
+//! ASYMMETRY worth stating, because the two sections do not record the
+//! same thing: the class section records the full transitive closure
+//! of `subClassOf` (`is_subclass` over every ordered pair), whereas
+//! both property sections record only `direct_subsumptions()`, the
+//! direct edges. So dropping an INTERMEDIATE property axiom out of a
+//! chain `p ⊑ q ⊑ r` shows up in this file as the two direct edges
+//! changing, but the derived `p ⊑ r` was never recorded and cannot
+//! move. That is a narrower sensitivity than the class side's, and it
+//! is what `direct_subsumptions()` offers at the pinned version.
+//!
 //! # What this closure can and cannot see (state the number, do not oversell it)
 //!
 //! The closure's sensitivity surface is exactly: named class
@@ -102,6 +117,18 @@ use horned_owl::model::RcStr;
 use horned_owl::ontology::set::SetOntology;
 
 /// The reasoner version this closure was produced with.
+///
+/// HAND-MAINTAINED, and deliberately so: `owl-dl-reasoner` exposes no
+/// version constant, and `env!("CARGO_PKG_VERSION")` here would report
+/// THIS crate's version, not the reasoner's. The binding that matters
+/// is therefore a convention, not a compiler check: this literal must
+/// be edited in the same commit as the `owl-dl-reasoner` `rev` in
+/// `Cargo.toml`. Forget it and a dependency bump that legitimately
+/// moves the closure surfaces as `Drift` (exit 4, "the ontology
+/// regressed") instead of `RebaselineRequired` (exit 4, "the oracle
+/// changed, review and re-accept"), which sends the reader looking for
+/// an ontology defect that does not exist. `check_golden` compares
+/// this against the golden file's header for exactly that reason.
 pub const REASONER_VERSION: &str = "rustdl v0.4.22";
 
 /// A golden file's parsed header: the reasoner version it was
@@ -144,9 +171,16 @@ pub fn closure(onto: &SetOntology<RcStr>) -> Result<String, String> {
     // is fully unbounded. The 24-minute-hang precedent in `oracle.rs`
     // therefore applies in principle to this call too, though nothing
     // in real SULO's 17 named classes has yet approached it (a full
-    // run here takes well under a second). Bounding it later with
-    // `classify_with_timeout` or `classify_with_global_deadline` would
-    // make `undecided_pairs` non-empty in a wall-clock-dependent way,
+    // run here takes well under a second). If it is ever bounded, the
+    // ONLY honest option is `classify_with_global_deadline`:
+    // `classify_with_timeout` (`classify.rs:840`) defaults a timed-out
+    // pair to "not subsumed" and bumps `timed_out_pairs`, and does NOT
+    // populate `undecided_pairs`, so it would silently drop timed-out
+    // subsumptions out of this closure with no record in the file at
+    // all, which is precisely the failure the `undecided` lines below
+    // exist to prevent. Bounding with `classify_with_global_deadline`
+    // instead would make `undecided_pairs` non-empty in a
+    // wall-clock-dependent way,
     // and therefore make the `undecided` lines in this closure flaky
     // (the same run could report a different undecided set depending
     // on machine load), which is a real cost against a real safety

@@ -1,0 +1,18 @@
+# Base ontology for tests/fixtures/case-all-fields.yaml. Deliberately
+# self-contained (no SULO dependency) and deliberately incomplete: the
+# unsatisfiable class the case asserts lives only in
+# allfields-import.ttl, so the case cannot pass unless `imports:` was
+# actually loaded and merged.
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ex:   <http://example.org/> .
+
+<http://example.org/allfields> a owl:Ontology .
+
+ex:A a owl:Class .
+ex:B a owl:Class ;
+     rdfs:subClassOf ex:A .
+ex:C a owl:Class .
+ex:A owl:disjointWith ex:C .
+
+ex:p a owl:ObjectProperty .

@@ -386,7 +386,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 [[package]]
 name = "owl-dl-core"
 version = "0.4.22"
-source = "git+https://github.com/MaastrichtU-IDS/rustdl?tag=v0.4.22#a2acc23a9909c4f106886d246e755ede9fa05d9a"
+source = "git+https://github.com/MaastrichtU-IDS/rustdl?rev=a2acc23a9909c4f106886d246e755ede9fa05d9a#a2acc23a9909c4f106886d246e755ede9fa05d9a"
 dependencies = [
  "bitvec",
  "bumpalo",
@@ -400,7 +400,7 @@ dependencies = [
 [[package]]
 name = "owl-dl-datatypes"
 version = "0.4.22"
-source = "git+https://github.com/MaastrichtU-IDS/rustdl?tag=v0.4.22#a2acc23a9909c4f106886d246e755ede9fa05d9a"
+source = "git+https://github.com/MaastrichtU-IDS/rustdl?rev=a2acc23a9909c4f106886d246e755ede9fa05d9a#a2acc23a9909c4f106886d246e755ede9fa05d9a"
 dependencies = [
  "owl-dl-core",
  "thiserror 2.0.20",
@@ -410,7 +410,7 @@ dependencies = [
 [[package]]
 name = "owl-dl-reasoner"
 version = "0.4.22"
-source = "git+https://github.com/MaastrichtU-IDS/rustdl?tag=v0.4.22#a2acc23a9909c4f106886d246e755ede9fa05d9a"
+source = "git+https://github.com/MaastrichtU-IDS/rustdl?rev=a2acc23a9909c4f106886d246e755ede9fa05d9a#a2acc23a9909c4f106886d246e755ede9fa05d9a"
 dependencies = [
  "anyhow",
  "dashmap",
@@ -428,7 +428,7 @@ dependencies = [
 [[package]]
 name = "owl-dl-saturation"
 version = "0.4.22"
-source = "git+https://github.com/MaastrichtU-IDS/rustdl?tag=v0.4.22#a2acc23a9909c4f106886d246e755ede9fa05d9a"
+source = "git+https://github.com/MaastrichtU-IDS/rustdl?rev=a2acc23a9909c4f106886d246e755ede9fa05d9a#a2acc23a9909c4f106886d246e755ede9fa05d9a"
 dependencies = [
  "dashmap",
  "fixedbitset",
@@ -443,7 +443,7 @@ dependencies = [
 [[package]]
 name = "owl-dl-tableau"
 version = "0.4.22"
-source = "git+https://github.com/MaastrichtU-IDS/rustdl?tag=v0.4.22#a2acc23a9909c4f106886d246e755ede9fa05d9a"
+source = "git+https://github.com/MaastrichtU-IDS/rustdl?rev=a2acc23a9909c4f106886d246e755ede9fa05d9a#a2acc23a9909c4f106886d246e755ede9fa05d9a"
 dependencies = [
  "bitvec",
  "bumpalo",
