@@ -627,8 +627,10 @@ pub fn holds(onto: &SetOntology<RcStr>, claim: &Claim) -> Result<bool, OracleFai
 /// module's default. A seam for testing the Timeout path
 /// deterministically (a zero deadline forces it on any arm that
 /// genuinely needs tableau work) without relying on a real reasoner
-/// call being slow. `ClassAssertion` is the one exception: see the
-/// module doc.
+/// call being slow. Every arm honours `deadline`, with no exceptions:
+/// the one unbounded reasoner call left in the crate is the
+/// consistency gate in `suite::run_case`, which this function never
+/// reaches.
 pub fn holds_with_deadline(
     onto: &SetOntology<RcStr>,
     claim: &Claim,
