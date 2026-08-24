@@ -353,25 +353,29 @@ the covering half of `DisjointUnion` in the ABox path", and an adversarial revie
 independently "confirmed" it. **Both measurements were wrong, and the error is
 worth recording because of how it happened.**
 
-Both were taken through a locally built `rustdl` CLI binary. That binary came from
-rustdl's working tree at `f1ab66b`, **14 commits ahead of tag `v0.4.22`**, which is
-what this harness pins. Re-measured through the library at the pinned tag: a
-`Feature` individual asserted to be none of its four disjoint-union members IS
-correctly reported inconsistent, with no expansion required. The 14 intervening
-commits are themselves about entailment loss, so what the two measurements actually
-found is a **regression in rustdl after `v0.4.22`**, not a property of the pinned
-version. Minimal reproducer, worth carrying upstream:
+Both were taken through a locally built `rustdl` CLI binary sitting at
+`target/release/rustdl` in a sibling checkout. **Neither of us checked what that
+binary actually was.** Re-measured properly by building each commit from source:
 
-```turtle
-ex:F a owl:Class ; owl:disjointUnionOf ( ex:A ex:B ) .
-ex:x a ex:F, [ owl:complementOf ex:A ], [ owl:complementOf ex:B ] .
-# v0.4.22 (666d31b): inconsistent, correct.  f1ab66b: consistent, wrong.
-```
+| Version | Verdict on the covering violation |
+| --- | --- |
+| that stale binary (reports `0.4.2`, built weeks earlier) | `consistent`, WRONG |
+| `v0.4.22` (`666d31b`), the pinned tag | `inconsistent`, correct |
+| `f1ab66b` | `inconsistent`, correct |
+| `v0.4.23` (`dc662a3`) | `inconsistent`, correct |
 
-The lesson generalises past this one axiom: **measure the version you pin, through
-the interface you use.** An ad-hoc CLI binary built from a working tree is not the
-library at a tag, and here the difference inverted a load-bearing conclusion that
-had already survived one adversarial review.
+So there is **no regression**, and there never was one after `v0.4.22`. The defect
+lives only in an old `0.4.2`-era build that happened to be lying around in a
+`target/` directory. Every version this project could plausibly depend on handles
+`DisjointUnion` correctly.
+
+The lesson generalises past this one axiom, and it is sharper than the first
+version of this note claimed: **identify the binary, do not infer it from the
+repository's `HEAD`.** A checkout's `git rev-parse HEAD` says nothing about when
+`target/release/` was last built or from what. `--version` and the file's mtime
+would have caught this in seconds. The conclusion survived my own writing, an
+adversarial review by a second model, a spec revision, and a code workaround built
+on top of it, before a rebuild-from-source disproved it.
 
 Two consequences stand, for reasons that survive the correction:
 
@@ -918,8 +922,8 @@ The table above tested only the paths that work. A later adversarial review test
 the paths that do not. It found four real problems, and it also produced one
 **false** finding that I confirmed rather than checked, which is the more useful
 lesson: the `DisjointUnion` covering row below was measured through an ad-hoc CLI
-binary 14 commits past the pinned tag, and is retracted. Measure the version you
-pin, through the interface you use. See section 6.1.
+stale `0.4.2` binary that was never identified, and is retracted. Identify the
+binary; do not infer it from the repository's HEAD. See section 6.1.
 
 The table above tested only the paths that work. A subsequent adversarial review
 tested the paths that do not, and found four problems serious enough to have
@@ -928,7 +932,7 @@ design-validation pass that only confirms its own happy path is not validation.
 
 | Probe | Result |
 | --- | --- |
-| `DisjointUnion` covering enforced in the ABox? | **RETRACTED. Measured wrong twice.** Read `consistent` through a CLI binary built 14 commits past the pinned tag. At `v0.4.22`, through the library, it is correctly `inconsistent`. See section 6.1: this was a rustdl regression after the tag, not a property of the pinned version. |
+| `DisjointUnion` covering enforced in the ABox? | **RETRACTED TWICE.** First read `consistent` and called it a property of the pinned version. Then called it a post-`v0.4.22` regression. Both wrong: the binary was a stale `0.4.2` build. `v0.4.22`, `f1ab66b` and `v0.4.23` all handle it correctly. See section 6.1. |
 | covering as an entailment instead? | works, and is retained as the better formulation. `Feature ⊑ (Capability or InformationObject or Quality or Role)`: `entailed: true`; the deliberate `Object ⋢ (SpatialObject or Feature)`: `entailed: false` |
 | `property-values` emits reflexive self-loops? | **no.** No `x isPartOf x` for any individual, so the reflexivity case would have failed spuriously. `instances-expr "(isPartOf value ex:d)"` returns `ex:d` correctly. |
 | `incomplete` flag rare on SULO? | **no.** `true` on essentially every non-EL query, including both covering checks. Invalidated the "Indeterminate should be empty" premise the verdict design rested on. |

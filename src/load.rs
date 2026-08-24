@@ -401,17 +401,23 @@ fn recover_all_disjoint_classes(
 /// is kept as defense-in-depth so the harness does not depend on the
 /// reasoner implementing `DisjointUnion`'s covering half natively.
 ///
-/// That dependency is not hypothetical. Measured: at the pinned
-/// `owl-dl-reasoner` tag v0.4.22, an individual typed `F` and
-/// explicitly neither `A` nor `B` under `DisjointUnion(F, A, B)` is
-/// correctly reported inconsistent even without this expansion; a
-/// later rustdl working-tree build (14 commits past v0.4.22, in
-/// commits about the pseudo-model prune silently losing entailments)
-/// reported the same case consistent, i.e. it lost the covering half.
-/// The regression is upstream of the version we pin, not present in
-/// it, but this expansion stays so a future rustdl bump landing that
-/// regression (or a similar one) does not silently weaken the
-/// harness.
+/// A note on why this exists, since the original justification was
+/// wrong. It was introduced to work around a supposed rustdl
+/// regression in which `DisjointUnion` lost its covering half. That
+/// regression does not exist: re-measured by building each commit
+/// from source, v0.4.22 (the pinned tag), f1ab66b, and v0.4.23 all
+/// correctly report an individual typed `F` and explicitly neither
+/// `A` nor `B` under `DisjointUnion(F, A, B)` as inconsistent. The
+/// only build that got it wrong was a stale 0.4.2-era binary left in
+/// a sibling `target/` directory, which was never identified as such.
+///
+/// The expansion is kept anyway, on its own merits rather than on
+/// that evidence: it is semantics-preserving, so it cannot make the
+/// ontology assert anything false, and it removes a silent dependency
+/// on the reasoner implementing `DisjointUnion`'s covering half
+/// natively. If that independence is not judged worth the extra
+/// axioms, this function can be deleted without changing what the
+/// ontology means.
 ///
 /// The original `DisjointUnion` is left in place: it is harmless and
 /// keeps the ontology faithful to its source.
