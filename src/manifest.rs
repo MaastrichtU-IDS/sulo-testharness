@@ -32,7 +32,6 @@ pub enum ManifestError {
     NoAssertions { path: PathBuf },
 }
 
-/// One or many, so `data:` accepts a string or a list.
 /// One competency question: a SPARQL query plus the rows it must
 /// return.
 ///
@@ -60,6 +59,7 @@ fn default_true() -> bool {
     true
 }
 
+/// One or many, so `data:` accepts a string or a list.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum OneOrMany {
