@@ -1,6 +1,7 @@
 //! Regression and competency-question test harness for the SULO ontology.
 
 pub mod claim;
+pub mod cq;
 pub mod golden;
 pub mod load;
 pub mod manifest;
