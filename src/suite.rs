@@ -21,8 +21,10 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::claim::{Claim, parse_fragment};
+use crate::cq::check_cq;
 use crate::load::{load_file, merge};
 use crate::manifest::Case;
+use crate::materialize::materialize;
 use crate::oracle::{
     Expectation, NO_PROOF_MARKER, check, check_instance_expr, check_satisfiable_expr,
     check_subsumption_expr,
@@ -347,6 +349,40 @@ pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
                 name: format!("unsatisfiable: {class}"),
                 verdict: Verdict::Indeterminate(IndeterminateReason::OracleError(e.to_string())),
             }),
+        }
+    }
+
+    // Competency questions. Materialised ONCE per case, not once per
+    // question: `materialize` costs roughly 16ms on real SULO, and
+    // paying that per CQ would multiply it by the question count for
+    // no benefit. Only paid at all when the case actually has a `cq:`
+    // block. The gate above already stopped this function before here
+    // whenever the ontology was inconsistent, so every CQ below runs
+    // against a store built from a genuinely consistent ontology.
+    //
+    // A `MaterializeError` means the store was never built, so none
+    // of the case's competency questions were actually asked: that is
+    // an `Indeterminate`, carrying the error text, for every `cq`
+    // entry, never a `Fail`. Reporting a build failure as a Fail would
+    // look exactly like an ontology regression.
+    if !case.cq.is_empty() {
+        match materialize(&onto, deadline) {
+            Ok(store) => {
+                for spec in &case.cq {
+                    checks.push(check_cq(&store, spec, &case.base_dir, &pm));
+                }
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                for spec in &case.cq {
+                    checks.push(CheckOutcome {
+                        name: format!("cq {}", spec.query.display()),
+                        verdict: Verdict::Indeterminate(IndeterminateReason::OracleError(
+                            msg.clone(),
+                        )),
+                    });
+                }
+            }
         }
     }
 

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use sulo_testharness::load::load_file;
-use sulo_testharness::manifest::{Case, load_case};
+use sulo_testharness::manifest::{Case, CqSpec, load_case};
 use sulo_testharness::suite::{downgrade_for_loss, run_case};
 use sulo_testharness::verdict::{CheckOutcome, IndeterminateReason, Verdict};
 
@@ -688,5 +688,189 @@ fn a_not_entails_fragment_with_no_triples_is_indeterminate_too() {
             "expected Indeterminate(OracleError), got {:?}",
             result.checks
         );
+    }
+}
+
+// ---------------------------------------------------------------
+// Task 5: wiring `cq:` into `run_case`. Four load-bearing rules,
+// tested in the order the task brief states them:
+//
+// 1. materialise ONCE per case, not once per competency question
+//    (proven indirectly: `cq_two_specs_on_the_same_case_runs_both`
+//    would still pass a per-question materialiser, since correctness
+//    does not depend on the count of `materialize` calls; the cost
+//    claim is instead recorded as a wall-clock note in the task
+//    report, not a unit test, since a call count is not observable
+//    from outside `suite.rs`);
+// 2. a gate stop must run zero CQ checks;
+// 3. a `MaterializeError` makes every CQ Indeterminate, not Fail;
+// 4. the deadline is `case.timeout_ms`, threaded exactly like every
+//    other check.
+//
+// `clean.ttl` (ex:A, ex:B rdfs:subClassOf ex:A, no individuals) is
+// deliberately small: `queries/subclass_of.rq` selects every
+// `?s rdfs:subClassOf ?o` pair, and the materialised closure over
+// this fixture contains exactly one such pair (no reasoner-inferred
+// subClassOf triples are added; step 2 of `materialize` only adds
+// rdf:type instance triples), so the expected row set is a single,
+// fully deterministic row: `{s: ex:B, o: ex:A}`.
+// ---------------------------------------------------------------
+
+fn cq_row(pairs: &[(&str, &str)]) -> BTreeMap<String, Option<String>> {
+    pairs
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), Some((*v).to_string())))
+        .collect()
+}
+
+fn subclass_of_spec(expect_rows: Vec<BTreeMap<String, Option<String>>>) -> CqSpec {
+    CqSpec {
+        query: PathBuf::from("queries/subclass_of.rq"),
+        expect_rows,
+        exact: true,
+        ordered: false,
+    }
+}
+
+#[test]
+fn a_matching_cq_yields_an_overall_pass() {
+    let mut case = base_case("cq-match");
+    case.ontology = Some(PathBuf::from("clean.ttl"));
+    case.cq = vec![subclass_of_spec(vec![cq_row(&[
+        ("s", "ex:B"),
+        ("o", "ex:A"),
+    ])])];
+
+    let result = run_case(&case, Path::new(UNUSED_DEFAULT));
+
+    assert_eq!(
+        result.checks.len(),
+        2,
+        "gate plus the one cq check should both be present, got {:?}",
+        result.checks
+    );
+    assert_eq!(result.verdict, Verdict::Pass, "got {:?}", result.checks);
+}
+
+#[test]
+fn a_mismatched_cq_yields_an_overall_fail() {
+    let mut case = base_case("cq-mismatch");
+    case.ontology = Some(PathBuf::from("clean.ttl"));
+    // ex:A is never a subject of rdfs:subClassOf in this fixture, so
+    // this expected row can never match the real answer.
+    case.cq = vec![subclass_of_spec(vec![cq_row(&[
+        ("s", "ex:A"),
+        ("o", "ex:B"),
+    ])])];
+
+    let result = run_case(&case, Path::new(UNUSED_DEFAULT));
+
+    assert_eq!(
+        result.checks.len(),
+        2,
+        "gate plus the one cq check should both be present, got {:?}",
+        result.checks
+    );
+    assert!(
+        matches!(result.verdict, Verdict::Fail(_)),
+        "a mismatched cq row must fail the case, got {:?}",
+        result.verdict
+    );
+    let cq_check = check_named(&result, "cq ");
+    assert!(
+        matches!(cq_check, Verdict::Fail(_)),
+        "the cq check itself must be the Fail, got {cq_check:?}"
+    );
+}
+
+#[test]
+fn a_case_with_both_entails_and_cq_runs_both() {
+    let mut case = base_case("cq-plus-entails");
+    case.ontology = Some(PathBuf::from("clean.ttl"));
+    case.entails = Some("ex:B rdfs:subClassOf ex:A .".into());
+    case.cq = vec![subclass_of_spec(vec![cq_row(&[
+        ("s", "ex:B"),
+        ("o", "ex:A"),
+    ])])];
+
+    let result = run_case(&case, Path::new(UNUSED_DEFAULT));
+
+    assert_eq!(
+        result.checks.len(),
+        3,
+        "gate, entails check, and cq check must all three be present, got {:?}",
+        result.checks
+    );
+    assert_eq!(result.verdict, Verdict::Pass, "got {:?}", result.checks);
+    assert_eq!(check_named(&result, "cq "), &Verdict::Pass);
+    assert_eq!(
+        check_named(&result, "Subsumption"),
+        &Verdict::Pass,
+        "the entails claim (ex:B rdfs:subClassOf ex:A) must also have run and passed"
+    );
+}
+
+#[test]
+fn a_gate_stop_runs_zero_cq_checks() {
+    let mut case = base_case("cq-gate-stop");
+    case.ontology = Some(PathBuf::from("inconsistent.ttl"));
+    case.expect_inconsistent = true;
+    // If materialisation or the cq loop ran anyway, this checks.len()
+    // assertion would catch it even if the cq check happened to
+    // "pass" vacuously against an inconsistent closure: the same
+    // reasoning the pre-existing gate tests use for entails.
+    case.cq = vec![subclass_of_spec(vec![cq_row(&[
+        ("s", "ex:B"),
+        ("o", "ex:A"),
+    ])])];
+
+    let result = run_case(&case, Path::new(UNUSED_DEFAULT));
+
+    assert!(
+        result.skipped,
+        "the gate stopped the case; the cq check must have been skipped"
+    );
+    assert_eq!(
+        result.checks.len(),
+        1,
+        "only the gate outcome should be present; the cq check must not have run, got {:?}",
+        result.checks
+    );
+}
+
+#[test]
+fn a_materialize_error_makes_every_cq_indeterminate_not_fail() {
+    // timeout_ms: 0 forces materialize's very first deadline check to
+    // fail immediately (the same zero-deadline seam
+    // oracle::holds_with_deadline already uses), so the store is never
+    // built. The gate itself is unbounded and ignores timeout_ms, so
+    // it still runs and passes; only the cq path is affected.
+    let mut case = base_case("cq-materialize-error");
+    case.ontology = Some(PathBuf::from("clean.ttl"));
+    case.timeout_ms = 0;
+    case.cq = vec![subclass_of_spec(vec![cq_row(&[
+        ("s", "ex:B"),
+        ("o", "ex:A"),
+    ])])];
+
+    let result = run_case(&case, Path::new(UNUSED_DEFAULT));
+
+    assert_eq!(
+        result.checks.len(),
+        2,
+        "gate plus the one cq check should both be present, got {:?}",
+        result.checks
+    );
+    let cq_check = check_named(&result, "cq ");
+    match cq_check {
+        Verdict::Indeterminate(IndeterminateReason::OracleError(msg)) => {
+            assert!(
+                msg.contains("time budget"),
+                "the reason should carry the MaterializeError text, got: {msg}"
+            );
+        }
+        other => panic!(
+            "a MaterializeError must make the cq check Indeterminate, never Fail, got {other:?}"
+        ),
     }
 }
