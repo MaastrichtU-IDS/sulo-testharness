@@ -1,0 +1,5 @@
+@prefix sulo: <https://w3id.org/sulo/> .
+@prefix ex:   <http://example.org/> .
+
+ex:whole a sulo:SpatialObject ;
+    sulo:hasPart ex:part .

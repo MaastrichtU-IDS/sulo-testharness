@@ -1,0 +1,6 @@
+@prefix sulo: <https://w3id.org/sulo/> .
+@prefix ex:   <http://example.org/> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+ex:badInstant a sulo:TimeInstant ;
+    sulo:hasValue "hello"^^xsd:string .

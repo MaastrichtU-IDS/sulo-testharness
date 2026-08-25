@@ -1,0 +1,18 @@
+id: timeinstant-datarange
+description: >-
+  TimeInstant rdfs:subClassOf (hasValue only (xsd:dateTime or
+  xsd:dateTimeStamp)): a TimeInstant given an xsd:string value ought
+  to be inconsistent under this allValuesFrom data-range restriction.
+  KNOWN LIMITATION, pinned reasoner v0.4.22: rustdl cannot enforce a
+  data-range allValuesFrom (see the "unsupported data range" baseline
+  loss logged for this exact axiom when sulo.ttl loads), so this case
+  is currently reported consistent, not inconsistent. Written and
+  tagged oracle-hermit anyway, deliberately: it documents the true
+  expectation and is excluded from tests/restrictions.rs's EXPECTED
+  table so it does not fail CI on a known reasoner gap. It activates
+  once a HermiT differential lands (see suites/sulo/restrictions/README.md).
+data: data/timeinstant-datarange.ttl
+prefixes:
+  ex: http://example.org/
+expect_inconsistent: true
+tags: [restrictions, datarange, oracle-hermit]

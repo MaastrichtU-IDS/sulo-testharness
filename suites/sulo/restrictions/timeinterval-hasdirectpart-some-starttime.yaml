@@ -1,0 +1,8 @@
+id: timeinterval-hasdirectpart-some-starttime
+description: >-
+  TimeInterval rdfs:subClassOf (hasDirectPart some StartTime): every
+  TimeInterval has a direct part that is a StartTime.
+entails_manchester:
+  - sub_expr: "sulo:TimeInterval"
+    sup_expr: "sulo:hasDirectPart some sulo:StartTime"
+tags: [restrictions, somevaluesfrom]

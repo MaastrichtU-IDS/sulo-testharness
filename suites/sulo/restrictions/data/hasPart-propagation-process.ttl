@@ -1,0 +1,5 @@
+@prefix sulo: <https://w3id.org/sulo/> .
+@prefix ex:   <http://example.org/> .
+
+ex:whole a sulo:Process ;
+    sulo:hasPart ex:part .

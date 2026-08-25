@@ -1,0 +1,12 @@
+id: hasPart-propagation-object
+description: >-
+  Object rdfs:subClassOf (hasPart only Object): a part of an Object is
+  itself entailed to be an Object, even though ex:part carries no
+  asserted type of its own.
+data: data/hasPart-propagation-object.ttl
+prefixes:
+  ex: http://example.org/
+instance_of_expr:
+  - individual: "http://example.org/part"
+    expr: "sulo:Object"
+tags: [restrictions, hasPart-propagation]

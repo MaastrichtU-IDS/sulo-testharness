@@ -1,0 +1,8 @@
+id: feature-isfeatureof-some-object-or-process
+description: >-
+  Feature rdfs:subClassOf (isFeatureOf some (Object or Process)):
+  every Feature is a feature of at least one Object or Process.
+entails_manchester:
+  - sub_expr: "sulo:Feature"
+    sup_expr: "sulo:isFeatureOf some (sulo:Object or sulo:Process)"
+tags: [restrictions, somevaluesfrom]

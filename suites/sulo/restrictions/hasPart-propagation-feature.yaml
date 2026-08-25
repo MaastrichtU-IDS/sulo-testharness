@@ -1,0 +1,12 @@
+id: hasPart-propagation-feature
+description: >-
+  Feature rdfs:subClassOf (hasPart only Feature): a part of a Feature
+  is itself entailed to be a Feature, even though ex:part carries no
+  asserted type of its own.
+data: data/hasPart-propagation-feature.ttl
+prefixes:
+  ex: http://example.org/
+instance_of_expr:
+  - individual: "http://example.org/part"
+    expr: "sulo:Feature"
+tags: [restrictions, hasPart-propagation]

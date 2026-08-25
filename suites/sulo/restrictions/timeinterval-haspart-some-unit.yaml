@@ -1,0 +1,8 @@
+id: timeinterval-haspart-some-unit
+description: >-
+  TimeInterval rdfs:subClassOf (hasPart some Unit): every TimeInterval
+  has a part that is a Unit.
+entails_manchester:
+  - sub_expr: "sulo:TimeInterval"
+    sup_expr: "sulo:hasPart some sulo:Unit"
+tags: [restrictions, somevaluesfrom]
