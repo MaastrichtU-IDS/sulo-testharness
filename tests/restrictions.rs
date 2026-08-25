@@ -44,7 +44,6 @@ const EXPECTED: &[&str] = &[
     "timeinterval-hasdirectpart-some-starttime",
     "timeinterval-hasdirectpart-some-endtime",
     "timeinterval-haspart-some-duration",
-    "timeinterval-haspart-some-unit",
     "duration-nonnegative",
 ];
 

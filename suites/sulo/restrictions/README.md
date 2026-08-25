@@ -1,6 +1,6 @@
 # suites/sulo/restrictions
 
-Covers 13 of the 16 class-expression restriction axioms in `sulo.ttl`
+Covers 12 of the 16 class-expression restriction axioms in `sulo.ttl`
 (rdfs:subClassOf axioms whose filler is a blank-node restriction, as
 opposed to the 15 named-class subClassOf axioms covered under
 `suites/sulo/taxonomy`):
@@ -8,19 +8,20 @@ opposed to the 15 named-class subClassOf axioms covered under
 - 5 `hasPart` propagation cases, one per `C rdfs:subClassOf (hasPart
   only C)`, for `Object`, `Process`, `SpatialObject`, `Feature`, and
   `InformationObject`.
-- 6 object `someValuesFrom` cases, as `entails_manchester`:
+- 5 object `someValuesFrom` cases, as `entails_manchester`:
   `Quantity subClassOf (hasPart some Unit)`, `Feature subClassOf
-  (isFeatureOf some (Object or Process))`, and `TimeInterval`'s four
+  (isFeatureOf some (Object or Process))`, and `TimeInterval`'s three
   (`hasDirectPart some StartTime`, `hasDirectPart some EndTime`,
-  `hasPart some Duration`, `hasPart some Unit`).
+  `hasPart some Duration`). `TimeInterval`'s fourth, `hasPart some
+  Unit`, has no case; see the fourth entry below.
 - `duration-nonnegative`, an `expect_inconsistent: true` counter-
   example for the `Duration` non-negative `xsd:decimal` facet.
 - `timeinstant-datarange`, tagged `oracle-hermit` and excluded from
   `tests/restrictions.rs`'s enforced `EXPECTED` table; see below.
 
-## The three axioms with no case
+## The four axioms with no case
 
-Three of the 16 restriction axioms are semantically inert: no data
+Four of the 16 restriction axioms are semantically inert: no data
 fixture can make them bite, because each is already entailed by other
 axioms already present in `sulo.ttl`, or is a tautology independent of
 `sulo.ttl` altogether. Recorded here so their absence reads as a
@@ -51,32 +52,21 @@ false confidence this project keeps finding and removing.
    `disjoint-object-process` (`suites/sulo/taxonomy`) under a
    different name, not testing anything this axiom alone contributes.
 
-## A fourth redundancy, found by mutation testing, not predicted
-
-`TimeInterval rdfs:subClassOf (hasPart some Unit)` is real Turtle in
-`sulo.ttl` and `timeinterval-haspart-some-unit` correctly gets `Pass`
-against real SULO. But removing ONLY this axiom from a scratch copy
-does not flip the case: it stays `Pass`. The derivation is direct,
-not a bug in the case or the harness: `TimeInterval rdfs:subClassOf
-Time`, `Time rdfs:subClassOf Quantity`, and `Quantity rdfs:subClassOf
-(hasPart some Unit)` together already entail `TimeInterval
-rdfs:subClassOf (hasPart some Unit)`, independently of TimeInterval's
-own copy of that restriction. `quantity-haspart-some-unit` (this same
-directory) is what actually carries the weight; TimeInterval's own
-restriction is redundant given it is already a `Quantity`.
-
-This was not predicted going in; it surfaced from actually mutating
-the axiom and watching the case fail to flip, the same way the
-`isPartOf`/`hasPart` inverse-and-transitivity redundancy surfaced in
-`suites/sulo/properties`. The case is kept: the claim it makes is
-still true and still worth having stated once per class, and nothing
-here suggests SULO should drop the explicit axiom (an ontology author
-reading `TimeInterval`'s definition benefits from seeing `hasPart some
-Unit` stated locally, even though a reasoner can derive it from
-`Quantity` two steps up). It is recorded here, not hidden, because a
-case that cannot be made to fail by removing what it claims to test is
-a fact about SULO's axiomatisation worth knowing, not a defect in the
-case.
+4. **`TimeInterval rdfs:subClassOf (hasPart some Unit)`.** Discovered
+   by mutation testing, not predicted going in: removing only this
+   axiom from a scratch copy of `sulo.ttl` does not flip
+   `quantity-haspart-some-unit`-shaped verification, because
+   `TimeInterval rdfs:subClassOf Time`, `Time rdfs:subClassOf
+   Quantity`, and `Quantity rdfs:subClassOf (hasPart some Unit)`
+   (asserted separately, and load-bearing on its own, per
+   `quantity-haspart-some-unit`) already entail it. Same shape as
+   entry 3 above, and ruled the same way for consistency: a case built
+   to exercise it would be re-testing `quantity-haspart-some-unit`
+   under a different name, not testing anything this axiom alone
+   contributes, so it gets no case. If `Quantity`'s own `hasPart some
+   Unit` restriction is ever removed from `sulo.ttl`, this axiom
+   becomes load-bearing for `TimeInterval` and the case should come
+   back.
 
 ## `timeinstant-datarange` and the HermiT gap
 

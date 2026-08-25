@@ -1,31 +1,26 @@
 id: inverse-pairs
 description: >-
-  All 9 owl:inverseOf pairs in sulo.ttl hold in both directions:
+  All 9 owl:inverseOf pairs in sulo.ttl hold in the backward direction:
   atTime/isTimeOf, isPrecededBy/precedes, isReferredToIn/refersTo,
   contains/isIn, hasFeature/isFeatureOf, hasItem/isItemIn,
   hasParticipant/isParticipantIn, hasDirectPart/isDirectPartOf, and
-  hasPart/isPartOf. Only the forward direction is asserted per pair;
-  the backward triple is checked purely as an entailment.
+  hasPart/isPartOf. Only the forward direction is asserted per pair, in
+  data/inverse-pairs.ttl; only the backward triple is checked here, as
+  an entailment. The forward triple is deliberately NOT re-asserted
+  under entails: it is already directly stated in the data, so
+  entailing it again would test nothing and would cost a second
+  reasoner call for free.
 data: data/inverse-pairs.ttl
 prefixes:
   ex: http://example.org/
 entails: |
-  ex:a1 sulo:atTime ex:b1 .
   ex:b1 sulo:isTimeOf ex:a1 .
-  ex:a2 sulo:isPrecededBy ex:b2 .
   ex:b2 sulo:precedes ex:a2 .
-  ex:a3 sulo:isReferredToIn ex:b3 .
   ex:b3 sulo:refersTo ex:a3 .
-  ex:a4 sulo:contains ex:b4 .
   ex:b4 sulo:isIn ex:a4 .
-  ex:a5 sulo:hasFeature ex:b5 .
   ex:b5 sulo:isFeatureOf ex:a5 .
-  ex:a6 sulo:hasItem ex:b6 .
   ex:b6 sulo:isItemIn ex:a6 .
-  ex:a7 sulo:hasParticipant ex:b7 .
   ex:b7 sulo:isParticipantIn ex:a7 .
-  ex:a8 sulo:hasDirectPart ex:b8 .
   ex:b8 sulo:isDirectPartOf ex:a8 .
-  ex:a9 sulo:hasPart ex:b9 .
   ex:b9 sulo:isPartOf ex:a9 .
 tags: [properties, inverse]
