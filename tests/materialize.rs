@@ -114,3 +114,60 @@ fn a_zero_deadline_times_out_rather_than_hanging() {
     let r = materialize(&onto, Duration::from_millis(0));
     assert!(r.is_err(), "a zero deadline must not silently succeed");
 }
+
+#[test]
+fn a_typed_data_property_value_is_present() {
+    let s = parts_store();
+    assert!(
+        ask(
+            &s,
+            r#"ASK { <http://example.org/o> <https://w3id.org/sulo/hasValue> "5"^^<http://www.w3.org/2001/XMLSchema#int> }"#
+        ),
+        "ex:o hasValue \"5\"^^xsd:int must be present as an exact typed literal"
+    );
+}
+
+#[test]
+fn a_plain_data_property_value_is_present() {
+    let s = parts_store();
+    assert!(
+        ask(
+            &s,
+            r#"ASK { <http://example.org/m> <https://w3id.org/sulo/hasValue> "hello" }"#
+        ),
+        "ex:m hasValue \"hello\" must be present as an exact xsd:string-typed literal"
+    );
+}
+
+#[test]
+fn a_language_tagged_data_property_value_is_present() {
+    let s = parts_store();
+    assert!(
+        ask(
+            &s,
+            r#"ASK { <http://example.org/n> <https://w3id.org/sulo/hasValue> "bonjour"@fr }"#
+        ),
+        "ex:n hasValue \"bonjour\"@fr must be present with its language tag intact"
+    );
+}
+
+#[test]
+fn a_language_tagged_value_never_becomes_a_tagless_langstring() {
+    // Regression for MaastrichtU-IDS/rustdl#72: inferred_data_property_values
+    // drops the `lang` element of its 5-tuple, so naively rebuilding every
+    // data value as `Literal::new_typed_literal(lexical, datatype)` off that
+    // 4-tuple silently reconstructs "bonjour"@fr as a TAGLESS
+    // rdf:langString-typed literal: not RDF-1.1-well-formed, and not equal
+    // to the correct term. materialize() must use the 5-tuple form
+    // (`materialize_data_property_assertions`) directly instead, so this
+    // malformed term must never appear in the store, alongside the correct
+    // one asserted by `a_language_tagged_data_property_value_is_present`.
+    let s = parts_store();
+    assert!(
+        !ask(
+            &s,
+            r#"ASK { <http://example.org/n> <https://w3id.org/sulo/hasValue> "bonjour"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> }"#
+        ),
+        "a tagless rdf:langString duplicate of a language-tagged value must never be inserted"
+    );
+}

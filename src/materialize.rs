@@ -8,8 +8,12 @@
 //! 1. Every asserted triple from the ontology and data files.
 //! 2. Every inferred class assertion, from `instances` over every named
 //!    class (the full closure, not most-specific types).
-//! 3. Every inferred object and data property assertion, from
-//!    `property-values`.
+//! 3. Every inferred object and data property assertion: object values
+//!    from `inferred_object_property_values`; data values from
+//!    `materialize_data_property_assertions` directly (not
+//!    `inferred_data_property_values`, which is the same closure with
+//!    the language tag dropped; see the data-property insertion code
+//!    below for why that distinction matters).
 //! 4. The reflexive self-loops `x isPartOf x` and `x hasPart x` for
 //!    every named individual, which `property-values` omits.
 //!
@@ -26,11 +30,12 @@
 //! against that precedent:
 //!
 //! * Step 3 (`inferred_object_property_values`,
-//!   `inferred_data_property_values`) is bounded: the former takes a
-//!   `pair_deadline` directly, honoured below; the latter is a pure
-//!   structural passthrough with no tableau search, the same reasoning
-//!   `oracle.rs` already documents for why it carries no deadline
-//!   parameter.
+//!   `materialize_data_property_assertions`) is bounded: the former
+//!   takes a `pair_deadline` directly, honoured below; the latter is a
+//!   pure structural passthrough with no tableau search, the same
+//!   reasoning `oracle.rs` already documents for why
+//!   `inferred_data_property_values` (which wraps this same call)
+//!   carries no deadline parameter.
 //! * Step 2 (`instances_of`, one call per named class) has NO deadline
 //!   parameter, and is therefore this module's one unbounded reasoner
 //!   call, alongside the consistency gate in `suite::run_case` and
@@ -38,11 +43,13 @@
 //!   for a measured reason rather than an oversight:
 //!
 //!   Two approaches were measured head to head on real SULO merged with
-//!   `tests/fixtures/parts.ttl` (7 named individuals, 17 named classes):
-//!   `instances_of` once per named class took 11.9ms total; the bounded
+//!   `tests/fixtures/parts.ttl` (7 named individuals, 17 named classes),
+//!   three runs of each, release build: `instances_of` once per named
+//!   class took 9.9-12.3ms total across the three runs; the bounded
 //!   alternative (`entailed_via_satisfiability_probe`, one call per
 //!   `(individual, class)` pair, cloning the ontology each time) took
-//!   80.9ms for the same closure, roughly 7x slower, and its cost is
+//!   52.6-55.2ms for the same closure (same result: 5 (individual,
+//!   class) pairs either way), roughly 5x slower, and its cost is
 //!   O(individuals x classes) where `instances_of`'s is O(classes). SULO
 //!   itself declares zero named individuals (it is pure TBox), so a
 //!   case's individual count is entirely driven by its data file, which
@@ -51,18 +58,33 @@
 //!   carries at all.
 //!
 //!   `instances_of` is not unconditionally unbounded in the way the
-//!   24-minute hang was: on the fast path (real SULO's TBox fragment
-//!   qualifies) it is a saturation-only closure computation with no
-//!   tableau search at all; only off that fast path does it fall back to
-//!   a per-individual tableau probe bounded by an env-var-configurable
-//!   timeout (`RUSTDL_REALIZE_PAIR_TIMEOUT_MS`, default 750ms) that this
-//!   module does not touch, matching `oracle.rs`'s documented refusal to
-//!   mutate that variable process-wide. The 24-minute hang that motivates
-//!   every OTHER bound in this crate came from a structurally different
-//!   call: `class_expression_instances`, which probes a class expression
-//!   extended with negation and a nominal, pushing the ontology out of
-//!   the fast fragment entirely. A plain named-class `instances_of` call
-//!   over the unmodified ontology, as used here, never does that.
+//!   24-minute hang was. Reading the pinned rustdl source
+//!   (`realize.rs`): it has a fast, saturation-only path with no tableau
+//!   search at all, taken when `realize_saturation_eligible` holds, and
+//!   otherwise falls back to a per-individual tableau probe bounded by
+//!   an env-var-configurable timeout (`RUSTDL_REALIZE_PAIR_TIMEOUT_MS`,
+//!   default 750ms) that this module does not touch, matching
+//!   `oracle.rs`'s documented refusal to mutate that variable
+//!   process-wide. `realize_saturation_eligible`'s own gates
+//!   (`is_pure_el`, `saturator_complete_fragment`,
+//!   `tbox_only_saturator_eligible`) are `pub(crate)` inside
+//!   owl-dl-reasoner, so this module cannot call them directly to prove
+//!   which path real SULO takes; what the measurement above DOES show is
+//!   that 17 calls together cost single-digit-to-low-double-digit
+//!   milliseconds, consistent with the fast path (or, at worst, with a
+//!   tableau fallback that happens to be cheap on this ontology) and
+//!   inconsistent with a per-pair 750ms tableau bound ever tripping.
+//!   Either way, the bound that DOES apply off the fast path is a real,
+//!   per-individual 750ms cap, not an unbounded search. `oracle.rs`'s
+//!   module doc records that the 24-minute hang came from a
+//!   structurally different call, `class_expression_instances`, which
+//!   probes a class expression extended with negation and a nominal
+//!   before delegating to `instances_of` internally, pushing the
+//!   ontology out of the fast fragment. A plain named-class
+//!   `instances_of` call over the unmodified ontology, as used here, is
+//!   a different call shape from the one that hung; this module does
+//!   not claim to know whether the per-pair timeout was already in
+//!   place, or already effective, at the time of that incident.
 //!
 //!   If a future SULO revision or case fixture ever makes this slow, the
 //!   fix is `instances_of_saturation_only` (a sound under-approximation
@@ -272,22 +294,41 @@ pub fn materialize(
     }
 
     remaining(start, deadline)?;
-    // No deadline parameter here: `inferred_data_property_values` is a
-    // pure structural passthrough over asserted data-property triples,
-    // not a tableau search, so it carries no comparable blow-up risk;
-    // see `oracle.rs`'s identical call for the same reasoning.
-    let data_values = owl_dl_reasoner::inferred_data_property_values(onto)
+    // Calls `materialize_data_property_assertions` directly, NOT
+    // `inferred_data_property_values`. The latter is exactly the
+    // former with the 5th (`lang`) element of every tuple dropped
+    // (verified against the pinned rustdl source:
+    // `inferred_data_property_values` is defined as
+    // `materialize_data_property_assertions(onto)?` mapped to a
+    // 4-tuple). Building every value as `new_typed_literal` off that
+    // dropped-tag 4-tuple would silently rebuild a language-tagged
+    // value like `"bonjour"@fr` as a TAGLESS `rdf:langString` term,
+    // which RDF 1.1 does not consider well-formed and which is not
+    // equal to the correct term (`langString_values_keep_their_tag`
+    // regression-tests this). Calling the 5-tuple form directly
+    // recovers the tag for the SAME closure (subproperty hierarchy,
+    // equivalent-data-properties, `SameIndividual` folding all
+    // still apply; only the shape of the return value differs), so
+    // this is a strictly more correct substitute, not a fallback.
+    // No deadline parameter here either: like
+    // `inferred_data_property_values`, this is a pure structural
+    // passthrough over asserted data-property triples, not a tableau
+    // search, so it carries no comparable blow-up risk; see
+    // `oracle.rs`'s identical call for the same reasoning.
+    let data_values = owl_dl_reasoner::materialize_data_property_assertions(onto)
         .map_err(|e| MaterializeError::Reasoner(e.to_string()))?;
-    for (s, p, lexical, datatype) in data_values.quads() {
+    for (s, p, lexical, datatype, lang) in &data_values {
         let subject = NamedNode::new(s).map_err(|e| MaterializeError::Store(e.to_string()))?;
         let predicate = NamedNode::new(p).map_err(|e| MaterializeError::Store(e.to_string()))?;
-        let dt = NamedNode::new(datatype).map_err(|e| MaterializeError::Store(e.to_string()))?;
-        let quad = Quad::new(
-            subject,
-            predicate,
-            Literal::new_typed_literal(lexical, dt),
-            GraphName::DefaultGraph,
-        );
+        let literal = if lang.is_empty() {
+            let dt =
+                NamedNode::new(datatype).map_err(|e| MaterializeError::Store(e.to_string()))?;
+            Literal::new_typed_literal(lexical, dt)
+        } else {
+            Literal::new_language_tagged_literal(lexical, lang)
+                .map_err(|e| MaterializeError::Store(e.to_string()))?
+        };
+        let quad = Quad::new(subject, predicate, literal, GraphName::DefaultGraph);
         store
             .insert(&quad)
             .map_err(|e| MaterializeError::Store(e.to_string()))?;
