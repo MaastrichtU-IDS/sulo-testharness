@@ -1,0 +1,10 @@
+id: transitivity-contains
+description: >-
+  contains is transitive: a three-step chain a-b-c-d closes to the
+  single hop a contains d.
+data: data/transitivity-contains.ttl
+prefixes:
+  ex: http://example.org/
+entails: |
+  ex:a sulo:contains ex:d .
+tags: [properties, transitivity]

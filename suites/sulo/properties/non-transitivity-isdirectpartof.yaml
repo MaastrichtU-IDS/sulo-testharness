@@ -1,0 +1,17 @@
+id: non-transitivity-isdirectpartof
+description: >-
+  isDirectPartOf is deliberately NOT transitive, unlike isPartOf: a
+  two-step isDirectPartOf chain a-b-c does not close to a
+  isDirectPartOf c. (a isPartOf c does hold, via isDirectPartOf's
+  subPropertyOf isPartOf plus isPartOf's own transitivity; that is
+  covered by suites/sulo/taxonomy and suites/sulo/properties'
+  subproperty-axioms case, not here.) This is the axiom a well-meaning
+  edit would "fix" by making isDirectPartOf transitive too, which
+  would collapse the distinction the property exists to make; this
+  case exists to stop that edit from passing review unnoticed.
+data: data/non-transitivity-isdirectpartof.ttl
+prefixes:
+  ex: http://example.org/
+not_entails: |
+  ex:a sulo:isDirectPartOf ex:c .
+tags: [properties, transitivity, deliberate-absence]

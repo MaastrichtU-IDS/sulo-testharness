@@ -1,0 +1,12 @@
+id: reflexivity
+description: >-
+  isPartOf and hasPart are both owl:ReflexiveProperty: an individual
+  with no asserted parthood at all still stands in both relations to
+  itself.
+data: data/reflexivity.ttl
+prefixes:
+  ex: http://example.org/
+entails: |
+  ex:x sulo:isPartOf ex:x .
+  ex:x sulo:hasPart ex:x .
+tags: [properties, reflexivity]

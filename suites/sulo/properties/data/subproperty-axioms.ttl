@@ -1,0 +1,9 @@
+@prefix sulo: <https://w3id.org/sulo/> .
+@prefix ex:   <http://example.org/> .
+
+# Four separate pairs, one per subPropertyOf axiom under test, so no
+# pair's inferred relations can bleed into another pair's check.
+ex:a1 sulo:isDirectPartOf ex:b1 .
+ex:a2 sulo:hasDirectPart ex:b2 .
+ex:a3 sulo:isPartOf ex:b3 .
+ex:a4 sulo:hasPart ex:b4 .

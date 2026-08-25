@@ -1,0 +1,10 @@
+id: transitivity-ispartof
+description: >-
+  isPartOf is transitive: a three-step chain a-b-c-d closes to the
+  single hop a isPartOf d.
+data: data/transitivity-ispartof.ttl
+prefixes:
+  ex: http://example.org/
+entails: |
+  ex:a sulo:isPartOf ex:d .
+tags: [properties, transitivity]

@@ -1,0 +1,10 @@
+id: functional-hasvalue
+description: >-
+  hasValue is owl:FunctionalProperty. A Quantity given two distinct
+  typed literals through hasValue is inconsistent: a functional
+  property permits at most one value per individual.
+data: data/functional-hasvalue.ttl
+prefixes:
+  ex: http://example.org/
+expect_inconsistent: true
+tags: [properties, functional]
