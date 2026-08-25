@@ -1,0 +1,8 @@
+id: covering-feature
+description: >-
+  The Feature disjoint union covers its four members: Feature is subsumed
+  by the union of Capability, InformationObject, Quality, and Role.
+entails_manchester:
+  - sub_expr: "sulo:Feature"
+    sup_expr: "sulo:Capability or sulo:InformationObject or sulo:Quality or sulo:Role"
+tags: [taxonomy, covering]

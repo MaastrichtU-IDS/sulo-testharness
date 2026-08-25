@@ -1,0 +1,4 @@
+@prefix sulo: <https://w3id.org/sulo/> .
+@prefix ex:   <http://example.org/> .
+
+ex:both a sulo:Duration, sulo:TimeInstant .

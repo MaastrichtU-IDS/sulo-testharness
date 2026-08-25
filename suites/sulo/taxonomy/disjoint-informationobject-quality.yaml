@@ -1,0 +1,7 @@
+id: disjoint-informationobject-quality
+description: Both are members of the Feature disjoint union.
+data: data/informationobject-and-quality.ttl
+prefixes:
+  ex: http://example.org/
+expect_inconsistent: true
+tags: [taxonomy, disjointness]

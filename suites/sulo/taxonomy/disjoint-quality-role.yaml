@@ -1,0 +1,7 @@
+id: disjoint-quality-role
+description: Both are members of the Feature disjoint union.
+data: data/quality-and-role.ttl
+prefixes:
+  ex: http://example.org/
+expect_inconsistent: true
+tags: [taxonomy, disjointness]

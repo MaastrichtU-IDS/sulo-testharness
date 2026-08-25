@@ -1,0 +1,12 @@
+id: non-covering-object
+description: >-
+  SULO does NOT make Object a disjoint union of SpatialObject and
+  Feature: this pins a deliberate absence. Object has other subclasses
+  than these two (e.g. Process's non-Object siblings aside, an Object
+  need not be either), and someone "completing the pattern" later by
+  adding a third disjoint-union axiom over Object would break downstream
+  data that relies on this remaining unentailed.
+not_entails_manchester:
+  - sub_expr: "sulo:Object"
+    sup_expr: "sulo:SpatialObject or sulo:Feature"
+tags: [taxonomy, covering, deliberate-absence]

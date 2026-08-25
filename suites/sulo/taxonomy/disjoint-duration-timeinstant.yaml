@@ -1,0 +1,7 @@
+id: disjoint-duration-timeinstant
+description: Both are members of the Time disjoint union.
+data: data/duration-and-timeinstant.ttl
+prefixes:
+  ex: http://example.org/
+expect_inconsistent: true
+tags: [taxonomy, disjointness]

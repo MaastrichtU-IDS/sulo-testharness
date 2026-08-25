@@ -1,0 +1,8 @@
+id: deep-chain
+description: >-
+  The deep chain closes: StartTime to TimeInstant to Time to Quantity to
+  InformationObject to Feature to Object, six subsumption steps deep, is
+  entailed as a single subclass claim.
+entails: |
+  sulo:StartTime rdfs:subClassOf sulo:Object .
+tags: [taxonomy, subsumption]

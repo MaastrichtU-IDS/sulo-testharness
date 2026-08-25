@@ -1,0 +1,10 @@
+id: non-subsumptions
+description: >-
+  Four named classes are NOT subclasses of a plausible-looking, but
+  unasserted, superclass.
+not_entails: |
+  sulo:Process rdfs:subClassOf sulo:Object .
+  sulo:Role rdfs:subClassOf sulo:Quality .
+  sulo:Unit rdfs:subClassOf sulo:Time .
+  sulo:SpatialObject rdfs:subClassOf sulo:Feature .
+tags: [taxonomy, subsumption]
