@@ -696,12 +696,11 @@ fn a_not_entails_fragment_with_no_triples_is_indeterminate_too() {
 // tested in the order the task brief states them:
 //
 // 1. materialise ONCE per case, not once per competency question
-//    (proven indirectly: `cq_two_specs_on_the_same_case_runs_both`
-//    would still pass a per-question materialiser, since correctness
-//    does not depend on the count of `materialize` calls; the cost
-//    claim is instead recorded as a wall-clock note in the task
-//    report, not a unit test, since a call count is not observable
-//    from outside `suite.rs`);
+//    (`cq_two_specs_on_the_same_case_runs_both` proves both entries
+//    still run correctly and independently, which a per-question
+//    materialiser would also satisfy: a call count is not observable
+//    from outside `suite.rs`, so the COST claim itself is recorded as
+//    a wall-clock note in the task report, not a unit test);
 // 2. a gate stop must run zero CQ checks;
 // 3. a `MaterializeError` makes every CQ Indeterminate, not Fail;
 // 4. the deadline is `case.timeout_ms`, threaded exactly like every
@@ -730,6 +729,59 @@ fn subclass_of_spec(expect_rows: Vec<BTreeMap<String, Option<String>>>) -> CqSpe
         exact: true,
         ordered: false,
     }
+}
+
+fn classes_spec(expect_rows: Vec<BTreeMap<String, Option<String>>>) -> CqSpec {
+    CqSpec {
+        query: PathBuf::from("queries/classes.rq"),
+        expect_rows,
+        exact: true,
+        ordered: false,
+    }
+}
+
+#[test]
+fn cq_two_specs_on_the_same_case_runs_both() {
+    // Two DISTINCT queries, so each check gets its own name and
+    // cannot be confused with the other. One deliberately matches
+    // (Pass), the other deliberately does not (Fail): the strongest
+    // form of this test, since a bug that reused the first spec for
+    // every loop iteration (or dropped the second entirely) would
+    // either produce the wrong verdict under the wrong name or make
+    // one of the two `check_named` lookups panic outright.
+    let mut case = base_case("cq-two-specs");
+    case.ontology = Some(PathBuf::from("clean.ttl"));
+    case.cq = vec![
+        // subclass_of.rq: the one true row, s: ex:B, o: ex:A. Passes.
+        subclass_of_spec(vec![cq_row(&[("s", "ex:B"), ("o", "ex:A")])]),
+        // classes.rq: clean.ttl declares TWO classes (ex:A, ex:B),
+        // but this expects only ex:A under exact: true. Fails.
+        classes_spec(vec![cq_row(&[("c", "ex:A")])]),
+    ];
+
+    let result = run_case(&case, Path::new(UNUSED_DEFAULT));
+
+    assert_eq!(
+        result.checks.len(),
+        3,
+        "gate plus both cq checks should be present, got {:?}",
+        result.checks
+    );
+    assert_eq!(
+        check_named(&result, "cq queries/subclass_of.rq"),
+        &Verdict::Pass,
+        "the first spec's own check must pass on its own terms"
+    );
+    let second = check_named(&result, "cq queries/classes.rq");
+    assert!(
+        matches!(second, Verdict::Fail(_)),
+        "the second spec's own check must fail on its own terms, got {second:?}"
+    );
+    assert!(
+        matches!(result.verdict, Verdict::Fail(_)),
+        "one failing cq must fail the whole case, got {:?}",
+        result.verdict
+    );
 }
 
 #[test]
@@ -873,4 +925,10 @@ fn a_materialize_error_makes_every_cq_indeterminate_not_fail() {
             "a MaterializeError must make the cq check Indeterminate, never Fail, got {other:?}"
         ),
     }
+    assert!(
+        matches!(result.verdict, Verdict::Indeterminate(_)),
+        "the gate passes and the cq is Indeterminate, which outranks Pass, so the \
+         aggregate verdict must be Indeterminate too, got {:?}",
+        result.verdict
+    );
 }
