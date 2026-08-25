@@ -1,0 +1,13 @@
+id: isitemin
+description: >-
+  isItemIn rdfs:range sulo:Collection: a bare isItemIn assertion
+  entails that the object is a Collection. (isItemIn's rdfs:domain is
+  owl:Thing, vacuous, so only the range side gets a case. isItemIn is
+  owl:inverseOf hasItem, so this and hasitem.yaml's entailment are
+  the same fact from opposite directions.)
+data: data/isitemin.ttl
+prefixes:
+  ex: http://example.org/
+entails: |
+  ex:c a sulo:Collection .
+tags: [domains-ranges]

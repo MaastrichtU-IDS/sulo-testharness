@@ -1,0 +1,21 @@
+id: precedes
+description: >-
+  precedes rdfs:domain sulo:Process, rdfs:range sulo:Process: a bare
+  precedes assertion entails both ends are Process. precedes is
+  owl:inverseOf isPrecededBy, and isPrecededBy carries the identical
+  domain/range pair, so each axiom is independently redundant with
+  the other via the inverse link: deleting ONLY this property's own
+  domain/range does not flip either case, because
+  ObjectPropertyDomain/Range on one member of an inverse pair is
+  re-derivable from the other member's domain/range plus
+  InverseObjectProperties (standard OWL 2 DL model theory, not an
+  RDFS-only inference). Both axioms are still asserted directly in
+  sulo.ttl and both are worth their own case; see
+  ../README.md for the mutation finding.
+data: data/precedes.ttl
+prefixes:
+  ex: http://example.org/
+entails: |
+  ex:a a sulo:Process .
+  ex:b a sulo:Process .
+tags: [domains-ranges]

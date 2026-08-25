@@ -1,0 +1,13 @@
+id: range-violation-hasparticipant
+description: >-
+  hasParticipant's range (sulo:Object) actually bites: giving the
+  participant a type disjoint from Object (Process, via Object
+  owl:disjointWith Process) is inconsistent. Without a range axiom
+  this data would be perfectly consistent, so this is the
+  counter-example proving the range constraint has teeth, not just
+  the positive entailment hasparticipant.yaml checks.
+data: data/range-violation-hasparticipant.ttl
+prefixes:
+  ex: http://example.org/
+expect_inconsistent: true
+tags: [domains-ranges, violation]

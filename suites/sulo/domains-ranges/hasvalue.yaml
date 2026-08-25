@@ -1,0 +1,15 @@
+id: hasvalue
+description: >-
+  hasValue rdfs:domain sulo:InformationObject: a bare hasValue
+  assertion entails that the subject is an InformationObject.
+  hasValue has no rdfs:range triple in sulo.ttl (the "range" side of
+  the pattern is enforced per-class instead, via the allValuesFrom
+  restrictions on Duration, TimeInstant, and InformationObject
+  itself, covered under suites/sulo/restrictions), so only this one
+  case exists for hasValue here.
+data: data/hasvalue.ttl
+prefixes:
+  ex: http://example.org/
+entails: |
+  ex:x a sulo:InformationObject .
+tags: [domains-ranges]

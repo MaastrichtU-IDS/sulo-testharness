@@ -1,0 +1,16 @@
+id: isfeatureof
+description: >-
+  isFeatureOf rdfs:domain sulo:Feature, rdfs:range (Object or Process)
+  [a union class]: a bare isFeatureOf assertion entails the subject is
+  a Feature (entails:) and the object falls in the anonymous union
+  class (instance_of_expr). isFeatureOf is owl:inverseOf hasFeature,
+  so this and hasfeature.yaml's entailments are the same two facts
+  from opposite directions.
+data: data/isfeatureof.ttl
+prefixes:
+  ex: http://example.org/
+entails: |
+  ex:f a sulo:Feature .
+instance_of_expr:
+  - { individual: "http://example.org/x", expr: "sulo:Object or sulo:Process" }
+tags: [domains-ranges]

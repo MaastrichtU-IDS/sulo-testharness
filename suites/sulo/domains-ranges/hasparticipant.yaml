@@ -1,0 +1,17 @@
+id: hasparticipant
+description: >-
+  hasParticipant rdfs:domain sulo:Process, rdfs:range sulo:Object: a
+  bare hasParticipant assertion between two untyped skolemised
+  individuals entails :p a Process and :o a Object. hasParticipant is
+  owl:inverseOf isParticipantIn, and isParticipantIn carries the
+  mirror-image domain/range pair (domain Object, range Process), so
+  as with precedes/isPrecededBy each axiom is independently
+  re-derivable from the other via the inverse link; see
+  isparticipantin.yaml and ../README.md.
+data: data/hasparticipant.ttl
+prefixes:
+  ex: http://example.org/
+entails: |
+  ex:p a sulo:Process .
+  ex:o a sulo:Object .
+tags: [domains-ranges]

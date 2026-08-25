@@ -1,0 +1,14 @@
+id: istimeof
+description: >-
+  isTimeOf rdfs:domain sulo:Time: a bare isTimeOf assertion entails
+  that the subject is a Time. (isTimeOf's rdfs:range is owl:Thing,
+  vacuous, so only the domain side gets a case. isTimeOf is
+  owl:inverseOf atTime, so this and attime.yaml's entailment are the
+  same fact reached from opposite directions; both axioms are still
+  independently asserted in sulo.ttl and both get their own case.)
+data: data/istimeof.ttl
+prefixes:
+  ex: http://example.org/
+entails: |
+  ex:t a sulo:Time .
+tags: [domains-ranges]
