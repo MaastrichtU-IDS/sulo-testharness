@@ -1,0 +1,16 @@
+id: cq-shape
+description: Exercises every corner of the cq schema.
+data: data/parts.ttl
+prefixes:
+  ex: http://example.org/
+cq:
+  - query: queries/who.rq
+    expect_rows:
+      - { p: "ex:alice" }
+      - { p: "ex:drsmith" }
+  - query: queries/values.rq
+    expect_rows:
+      - { v: '"37.8"^^xsd:double', unit: "ex:celsius" }
+      - { v: '"unbound-case"', unit: null }
+    exact: false
+    ordered: true

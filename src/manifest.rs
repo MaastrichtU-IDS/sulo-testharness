@@ -27,12 +27,39 @@ pub enum ManifestError {
     #[error(
         "manifest {path} asserts nothing: set at least one of entails, not_entails, \
          entails_manchester, not_entails_manchester, instance_of_expr, satisfiable_expr, \
-         unsatisfiable, or expect_inconsistent: true"
+         unsatisfiable, cq, or expect_inconsistent: true"
     )]
     NoAssertions { path: PathBuf },
 }
 
 /// One or many, so `data:` accepts a string or a list.
+/// One competency question: a SPARQL query plus the rows it must
+/// return.
+///
+/// `expect_rows` is a list of rows, each a map from variable name to
+/// an expected token. A YAML `null` means the variable must be
+/// UNBOUND in that row, which is different from the key being absent
+/// (an absent key is not compared at all).
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CqSpec {
+    pub query: PathBuf,
+    #[serde(default)]
+    pub expect_rows: Vec<BTreeMap<String, Option<String>>>,
+    /// `true` requires set equality with the actual rows. `false`
+    /// requires only that every expected row is present.
+    #[serde(default = "default_true")]
+    pub exact: bool,
+    /// `true` compares as a sequence. Only meaningful with an
+    /// `ORDER BY` in the query.
+    #[serde(default)]
+    pub ordered: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum OneOrMany {
@@ -97,6 +124,8 @@ struct RawCase {
     #[serde(default)]
     unsatisfiable: Vec<String>,
     #[serde(default)]
+    cq: Vec<CqSpec>,
+    #[serde(default)]
     tags: Vec<String>,
     #[serde(default = "default_timeout")]
     timeout_ms: u64,
@@ -142,6 +171,7 @@ pub struct Case {
     pub instance_of_expr: Vec<InstanceExpr>,
     pub satisfiable_expr: Vec<String>,
     pub unsatisfiable: Vec<String>,
+    pub cq: Vec<CqSpec>,
     /// Free-form labels. Parsed and carried, but nothing reads them
     /// yet: the `--tag` case filter is deferred, so a tag today is
     /// documentation for a human reader, not a selector. Recorded here
@@ -191,7 +221,8 @@ pub fn load_case(path: &Path) -> Result<Case, ManifestError> {
         || !raw.not_entails_manchester.is_empty()
         || !raw.instance_of_expr.is_empty()
         || !raw.satisfiable_expr.is_empty()
-        || !raw.unsatisfiable.is_empty();
+        || !raw.unsatisfiable.is_empty()
+        || !raw.cq.is_empty();
     if !asserts_something {
         return Err(ManifestError::NoAssertions {
             path: path.to_path_buf(),
@@ -213,6 +244,7 @@ pub fn load_case(path: &Path) -> Result<Case, ManifestError> {
         instance_of_expr: raw.instance_of_expr,
         satisfiable_expr: raw.satisfiable_expr,
         unsatisfiable: raw.unsatisfiable,
+        cq: raw.cq,
         tags: raw.tags,
         timeout_ms: raw.timeout_ms,
         base_dir: path.parent().unwrap_or(Path::new(".")).to_path_buf(),

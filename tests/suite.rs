@@ -175,6 +175,7 @@ fn base_case(id: &str) -> Case {
         instance_of_expr: vec![],
         satisfiable_expr: vec![],
         unsatisfiable: vec![],
+        cq: vec![],
         tags: vec![],
         timeout_ms: 30_000,
         base_dir: PathBuf::from("tests/fixtures"),

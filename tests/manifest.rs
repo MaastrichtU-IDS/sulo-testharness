@@ -66,3 +66,48 @@ fn expect_inconsistent_alone_is_a_real_case() {
     assert!(c.expect_inconsistent);
     assert!(c.entails.is_none());
 }
+
+#[test]
+fn parses_the_cq_block() {
+    let c = load_case(Path::new("tests/fixtures/case-with-cq.yaml")).unwrap();
+    assert_eq!(c.cq.len(), 2, "both cq entries parsed");
+
+    let first = &c.cq[0];
+    assert_eq!(first.query, Path::new("queries/who.rq"));
+    assert_eq!(first.expect_rows.len(), 2);
+    assert_eq!(
+        first.expect_rows[0].get("p"),
+        Some(&Some("ex:alice".to_string()))
+    );
+    assert!(first.exact, "exact defaults to true");
+    assert!(!first.ordered, "ordered defaults to false");
+
+    let second = &c.cq[1];
+    assert!(!second.exact, "exact was set false");
+    assert!(second.ordered, "ordered was set true");
+    assert_eq!(
+        second.expect_rows[1].get("unit"),
+        Some(&None),
+        "a null in YAML means expected-unbound, not a missing key"
+    );
+}
+
+#[test]
+fn a_case_with_only_a_cq_is_a_real_case() {
+    // `cq` must satisfy the no-assertions guard from the engine plan,
+    // otherwise a pure competency-question case is rejected.
+    let c = load_case(Path::new("tests/fixtures/case-with-cq.yaml")).unwrap();
+    assert!(!c.cq.is_empty());
+}
+
+#[test]
+fn an_unknown_key_inside_cq_is_rejected() {
+    // Same reasoning as the top-level deny_unknown_fields: a typo'd
+    // `expect_row:` must not silently mean "no rows expected".
+    let err = load_case(Path::new("tests/fixtures/case-cq-bad-key.yaml"))
+        .expect_err("unknown key inside a cq entry must be an error");
+    assert!(
+        err.to_string().contains("expect_row"),
+        "error names the key: {err}"
+    );
+}
