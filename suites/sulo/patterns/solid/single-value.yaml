@@ -1,0 +1,15 @@
+id: single-value
+description: >-
+  hasValue is owl:FunctionalProperty: giving the measurement a second,
+  distinct hasValue literal is inconsistent. This is the guarantee
+  the SOLID pattern relies on for "the value" of a measurement to be
+  well defined at all; without it, "recover the value" would not be a
+  meaningful competency question.
+data:
+  - data/measurement.ttl
+  - data/single-value-second.ttl
+prefixes:
+  ex: http://example.org/
+  obo: http://purl.obolibrary.org/obo/
+expect_inconsistent: true
+tags: [pattern, solid, functional]

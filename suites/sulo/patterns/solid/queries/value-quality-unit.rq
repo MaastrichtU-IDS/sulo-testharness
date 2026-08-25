@@ -1,0 +1,11 @@
+# hasPart is owl:ReflexiveProperty, and materialize injects the
+# self-loop x hasPart x for every named individual (spec section 8
+# step 6). Without the FILTER below, ?unit would also bind to
+# <http://example.org/measurement> itself via that self-loop.
+PREFIX sulo: <https://w3id.org/sulo/>
+SELECT ?value ?quality ?unit WHERE {
+  <http://example.org/measurement> sulo:hasValue ?value ;
+      sulo:refersTo ?quality ;
+      sulo:hasPart ?unit .
+  FILTER (?unit != <http://example.org/measurement>)
+}
