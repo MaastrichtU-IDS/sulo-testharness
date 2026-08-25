@@ -27,6 +27,13 @@ horned-owl = { version = "1.4", default-features = false }
 owl-dl-reasoner = { git = "https://github.com/MaastrichtU-IDS/rustdl", rev = "a2acc23a9909c4f106886d246e755ede9fa05d9a" }
 oxrdfio = "0.2.0"
 oxrdf = "0.3.0"
+# In-memory SPARQL store for the competency-question path (task 3). Verified:
+# with default-features off this resolves to the SAME oxrdf 0.3.3 and
+# oxrdfio 0.2.5 already pinned above, so there is exactly one `Term` type in
+# the dependency tree; `cargo tree | grep oxrdf` confirms this. Default
+# features pull in `oxrocksdb-sys`, a native RocksDB build this harness has
+# no use for since `Store::new()` (in-memory) is all `materialize` needs.
+oxigraph = { version = "0.5.9", default-features = false }
 curie = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
