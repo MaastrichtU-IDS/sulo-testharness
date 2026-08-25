@@ -156,3 +156,86 @@ fn the_error_names_what_was_missing() {
         "the message must name the missing row: {err}"
     );
 }
+
+#[test]
+fn ordered_true_with_exact_false_is_a_configuration_error() {
+    // Spec 7.3 does not disambiguate this combination: "expected is a
+    // contiguous prefix of actual" and "expected is a non-contiguous
+    // ordered subsequence, extras allowed anywhere" are equally licensed.
+    // Refuse rather than silently pick a reading.
+    let e = vec![row(&[("p", Some(iri("http://example.org/a")))])];
+    let a = vec![row(&[("p", Some(iri("http://example.org/a")))])];
+    let err = compare(&e, &a, false, true).unwrap_err();
+    assert!(
+        err.contains("ordered") && err.contains("exact"),
+        "the message must name both flags: {err}"
+    );
+}
+
+#[test]
+fn ordered_positional_mismatch_names_both_rows() {
+    let e = vec![row(&[("p", Some(iri("http://example.org/expected_here")))])];
+    let a = vec![row(&[("p", Some(iri("http://example.org/actual_here")))])];
+    let err = compare(&e, &a, true, true).unwrap_err();
+    assert!(
+        err.contains("expected_here") && err.contains("actual_here"),
+        "the message must name what was expected and what was found: {err}"
+    );
+}
+
+#[test]
+fn ordered_missing_position_names_the_missing_row() {
+    let e = vec![
+        row(&[("p", Some(iri("http://example.org/a")))]),
+        row(&[("p", Some(iri("http://example.org/missing_position")))]),
+    ];
+    let a = vec![row(&[("p", Some(iri("http://example.org/a")))])];
+    let err = compare(&e, &a, true, true).unwrap_err();
+    assert!(
+        err.contains("missing_position"),
+        "the message must name the missing row: {err}"
+    );
+}
+
+#[test]
+fn ordered_exact_rejects_a_trailing_extra_row() {
+    // Drives the ordered+exact leftover-length branch to completion: every
+    // position up to expected.len() matches, but actual is longer.
+    let e = vec![row(&[("p", Some(iri("http://example.org/a")))])];
+    let a = vec![
+        row(&[("p", Some(iri("http://example.org/a")))]),
+        row(&[("p", Some(iri("http://example.org/trailing_extra")))]),
+    ];
+    let err = compare(&e, &a, true, true).unwrap_err();
+    assert!(
+        err.contains("trailing_extra"),
+        "the message must name the extra row: {err}"
+    );
+}
+
+#[test]
+fn unordered_exact_extra_row_is_named() {
+    let e = vec![row(&[("p", Some(iri("http://example.org/a")))])];
+    let a = vec![
+        row(&[("p", Some(iri("http://example.org/a")))]),
+        row(&[("p", Some(iri("http://example.org/unordered_extra")))]),
+    ];
+    let err = compare(&e, &a, true, false).unwrap_err();
+    assert!(
+        err.contains("unordered_extra"),
+        "the message must name an extra row: {err}"
+    );
+}
+
+#[test]
+fn an_unrecognised_escape_in_a_literal_is_an_error() {
+    // \x is not one of the recognised escapes; silently passing it
+    // through as literal backslash-x would surprise a suite author who
+    // meant something else by it.
+    let err = parse_expected(Some(r#""ba\x""#), &base_mapping()).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("\\x"),
+        "the message must name the offending escape: {msg}"
+    );
+}

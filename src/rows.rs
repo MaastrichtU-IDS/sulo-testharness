@@ -88,8 +88,9 @@ fn parse_literal(t: &str, pm: &PrefixMapping) -> Result<Term, RowError> {
                 't' => value.push('\t'),
                 'r' => value.push('\r'),
                 other => {
-                    value.push('\\');
-                    value.push(other);
+                    return Err(RowError::Syntax(format!(
+                        "'\\{other}' is not a recognised escape in literal {t}: use \\\" \\\\ \\n \\t \\r"
+                    )));
                 }
             }
             escaped = false;
@@ -136,27 +137,45 @@ fn parse_literal(t: &str, pm: &PrefixMapping) -> Result<Term, RowError> {
 /// identical term (`None` meaning explicitly unbound), and vice versa,
 /// since `BTreeMap`'s `PartialEq` already requires equal key sets.
 ///
-/// `exact` and `ordered` are independent axes, as in spec 7.3. `ordered`
-/// selects the comparison mechanism: positional (a sequence) instead of a
-/// multiset. `exact` then governs, for either mechanism, whether leftover
-/// actual rows beyond what was matched are tolerated (`exact: false`) or
-/// an error (`exact: true`). Never the reverse: `expected` must always be
-/// fully accounted for in `actual`.
+/// `exact` and `ordered` are independent axes, as in spec 7.3, with one
+/// combination refused rather than decided: `ordered: true, exact: false`
+/// is genuinely ambiguous under spec 7.3 (it equally supports "expected is
+/// a contiguous prefix of actual" and "expected is a non-contiguous ordered
+/// subsequence of actual, with extras allowed anywhere"), so it is a
+/// configuration error rather than a silently picked reading. Use
+/// `ordered: true, exact: true` for an exact sequence, or `ordered: false,
+/// exact: false` for an unordered subset.
 ///
-/// When `ordered`, expected row `i` must equal actual row `i`, in order;
-/// a missing position is an error regardless of `exact`. Otherwise rows
-/// are compared as a multiset: each expected row is removed from a
+/// When `ordered` (and therefore also `exact`, per the above), expected
+/// row `i` must equal actual row `i`, in order; a missing position is an
+/// error, and once every expected row has matched positionally, any
+/// leftover actual rows are also an error. Otherwise (`ordered: false`)
+/// rows are compared as a multiset: each expected row is removed from a
 /// working copy of `actual`, so a duplicate expected row must be matched
-/// once per occurrence.
+/// once per occurrence, and `exact` then governs whether leftover actual
+/// rows are tolerated (`exact: false`) or an error (`exact: true`). Never
+/// the reverse: `expected` must always be fully accounted for in `actual`.
 ///
-/// Returns `Err` naming the first missing expected row, or, for `exact`,
-/// the count and first example of the unmatched actual rows.
+/// Returns `Err` naming the first missing or mismatched expected row, or,
+/// for `exact`, the count and first example of the unmatched actual rows.
 pub fn compare(
     expected: &[BTreeMap<String, Option<Term>>],
     actual: &[BTreeMap<String, Option<Term>>],
     exact: bool,
     ordered: bool,
 ) -> Result<(), String> {
+    if ordered && !exact {
+        return Err(
+            "ordered: true with exact: false is not defined: spec 7.3 does not say \
+             whether an unmatched actual row may appear before, between, or only \
+             after the expected sequence, so this combination (ordered=true, \
+             exact=false) is refused rather than guessed. Use ordered: true, \
+             exact: true for an exact sequence, or ordered: false, exact: false \
+             for an unordered subset."
+                .to_string(),
+        );
+    }
+
     if ordered {
         for (i, e) in expected.iter().enumerate() {
             match actual.get(i) {
