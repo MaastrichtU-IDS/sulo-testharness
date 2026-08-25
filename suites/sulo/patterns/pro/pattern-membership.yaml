@@ -1,0 +1,16 @@
+id: pattern-membership
+description: >-
+  encounter falls under the PRO pattern's own Manchester class
+  expression: a Process that hasParticipant some (Role that
+  isFeatureOf some Object). This exercises the chain and the typing
+  together, via instance_of_expr rather than a ground triple, since
+  there is no honest way to write membership in an anonymous
+  restriction class as Turtle (spec 7.1).
+data: data/encounter.ttl
+prefixes:
+  ex: http://example.org/
+  obo: http://purl.obolibrary.org/obo/
+instance_of_expr:
+  - { individual: "http://example.org/encounter",
+      expr: "sulo:Process and sulo:hasParticipant some (sulo:Role and sulo:isFeatureOf some sulo:Object)" }
+tags: [pattern, pro]

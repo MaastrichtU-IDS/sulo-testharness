@@ -1,0 +1,34 @@
+@prefix ex: <http://example.org/> .
+@prefix sulo: <https://w3id.org/sulo/> .
+@prefix obo: <http://purl.obolibrary.org/obo/> .
+
+# Adapted from the SULO paper's Figure 7 (the PRO pattern), NOT
+# transcribed verbatim: the paper's own listing is not valid Turtle
+# and would not parse as printed. Repairs applied, all recorded in
+# spec 9.1 and in ../README.md:
+#   - namespace corrected from http://w3id.org/sulo/ to
+#     https://w3id.org/sulo/
+#   - the missing terminating dot on @prefix obo:, and the stray dot
+#     that orphaned the sulo:hasParticipant line, both fixed
+#   - taxon: is not used here (obo:NCBITaxon_9606 used directly
+#     instead, which the paper's own inference example also uses)
+#   - the inferred subject renamed from :visit_1 to :encounter, to
+#     match the individual the data itself defines
+#   - the two role individuals are typed sulo:Role EXPLICITLY. The
+#     paper types them only as OMRSE classes (OMRSE_00000011,
+#     OMRSE_00000012), which are not imported into sulo.ttl, so
+#     nothing makes them sulo:Role and the property chain cannot fire
+#     as printed. This is a substantive repair, not a typo.
+
+ex:encounter a sulo:Process .
+
+ex:alice a obo:NCBITaxon_9606, sulo:Object .
+ex:drsmith a obo:NCBITaxon_9606, sulo:Object .
+
+ex:patient-role a sulo:Role ;
+    sulo:isFeatureOf ex:alice .
+
+ex:doctor-role a sulo:Role ;
+    sulo:isFeatureOf ex:drsmith .
+
+ex:encounter sulo:hasParticipant ex:patient-role, ex:doctor-role .
