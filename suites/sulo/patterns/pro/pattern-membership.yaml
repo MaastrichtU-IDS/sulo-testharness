@@ -1,16 +1,39 @@
 id: pattern-membership
 description: >-
-  encounter falls under the PRO pattern's own Manchester class
-  expression: a Process that hasParticipant some (Role that
-  isFeatureOf some Object). This exercises the chain and the typing
-  together, via instance_of_expr rather than a ground triple, since
-  there is no honest way to write membership in an anonymous
-  restriction class as Turtle (spec 7.1).
+  Split across two check kinds, deliberately, because
+  check_instance_expr cannot prove both halves at once with the
+  pinned reasoner: verified empirically (see ../README.md) that its
+  someValuesFrom-over-a-nominal probe cannot combine a
+  propertyChainAxiom-derived property assertion with a nested
+  restriction, in ANY shape tried (someValuesFrom, hasValue), even
+  though the SAME chain-derived fact is directly provable via
+  entails: (role-chain.yaml already does). So:
+
+  (1) entails: encounter hasParticipant alice, drsmith is the same
+  chain-derived fact role-chain.yaml proves. Removing
+  hasParticipant's propertyChainAxiom flips this half, which is what
+  makes the case as a whole depend on the chain rather than on the
+  asserted data alone.
+
+  (2) instance_of_expr: each Role individual satisfies Figure 5's
+  pattern class expression, Role and isFeatureOf some Object. This no
+  longer holds against a bare, axiom-free TBox: alice and drsmith are
+  typed sulo:SpatialObject (matching the paper), never sulo:Object
+  directly, so isFeatureOf some Object requires sulo.ttl's own
+  SpatialObject rdfs:subClassOf Object axiom to fire, not merely an
+  asserted triple. This is the fix for the vacuousness found in
+  review: the original version typed alice/drsmith sulo:Object
+  directly, which made every conjunct of the expression a directly
+  asserted triple, true against an EMPTY TBox.
 data: data/encounter.ttl
 prefixes:
   ex: http://example.org/
   obo: http://purl.obolibrary.org/obo/
+entails: |
+  ex:encounter sulo:hasParticipant ex:alice, ex:drsmith .
 instance_of_expr:
-  - { individual: "http://example.org/encounter",
-      expr: "sulo:Process and sulo:hasParticipant some (sulo:Role and sulo:isFeatureOf some sulo:Object)" }
+  - { individual: "ex:patient-role",
+      expr: "sulo:Role and sulo:isFeatureOf some sulo:Object" }
+  - { individual: "ex:doctor-role",
+      expr: "sulo:Role and sulo:isFeatureOf some sulo:Object" }
 tags: [pattern, pro]

@@ -7,6 +7,6 @@ data: data/hasPart-propagation-spatialobject.ttl
 prefixes:
   ex: http://example.org/
 instance_of_expr:
-  - individual: "http://example.org/part"
+  - individual: "ex:part"
     expr: "sulo:SpatialObject"
 tags: [restrictions, hasPart-propagation]

@@ -7,7 +7,10 @@ description: >-
   Feature rdfs:subClassOf (hasPart only Feature) then applies to
   every hasPart value of anything Feature-typed. This is the
   pattern's semantics doing real work, verified during design, not an
-  artifact of how the unit happens to be typed.
+  artifact of how the unit happens to be typed. Mutation-verified as
+  needing BOTH Feature's restriction and InformationObject's own
+  (hasPart only InformationObject); either alone still propagates
+  Feature-hood, since measurement is both. See ../README.md.
 data: data/measurement.ttl
 prefixes:
   ex: http://example.org/

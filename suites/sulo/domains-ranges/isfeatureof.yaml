@@ -12,5 +12,5 @@ prefixes:
 entails: |
   ex:f a sulo:Feature .
 instance_of_expr:
-  - { individual: "http://example.org/x", expr: "sulo:Object or sulo:Process" }
+  - { individual: "ex:x", expr: "sulo:Object or sulo:Process" }
 tags: [domains-ranges]

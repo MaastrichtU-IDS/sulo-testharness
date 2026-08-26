@@ -5,16 +5,12 @@ description: >-
   Feature (a named class, checked via entails:) and the subject falls
   in the anonymous union class (checked via instance_of_expr, since
   there is no honest way to write membership in an anonymous union as
-  a ground Turtle triple; see spec 7.1). instance_of_expr's
-  individual: field is passed to the reasoner unresolved (run_case
-  does not expand it through the prefix map the way expect_rows and
-  Manchester expressions are), so it must be a full <IRI>, not a
-  CURIE; see ../README.md.
+  a ground Turtle triple; see spec 7.1).
 data: data/hasfeature.ttl
 prefixes:
   ex: http://example.org/
 entails: |
   ex:f a sulo:Feature .
 instance_of_expr:
-  - { individual: "http://example.org/x", expr: "sulo:Object or sulo:Process" }
+  - { individual: "ex:x", expr: "sulo:Object or sulo:Process" }
 tags: [domains-ranges]

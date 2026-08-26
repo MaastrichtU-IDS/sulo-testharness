@@ -7,6 +7,6 @@ data: data/hasPart-propagation-object.ttl
 prefixes:
   ex: http://example.org/
 instance_of_expr:
-  - individual: "http://example.org/part"
+  - individual: "ex:part"
     expr: "sulo:Object"
 tags: [restrictions, hasPart-propagation]

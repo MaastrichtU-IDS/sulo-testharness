@@ -4,9 +4,12 @@ description: >-
   it refers to, and its unit together in one query over the
   materialised store. This is the executable form of the paper's
   "predictable location for data values" claim: value via hasValue,
-  quality via refersTo, unit via hasPart, on one fixed shape, with no
-  reasoning required at query time beyond what materialize already
-  closed.
+  quality via refersTo, unit via hasPart, on one fixed shape. The
+  query also joins "a sulo:Object" on the measurement, which is
+  entailed only through the typing chain (typing-chain.yaml), not
+  asserted: without that join every triple this query matches is
+  directly asserted in the data, and the CQ could not be refuted by
+  any ontology mutation. See ../README.md.
 data: data/measurement.ttl
 prefixes:
   ex: http://example.org/

@@ -316,14 +316,26 @@ pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
         ));
     }
     for i in &case.instance_of_expr {
-        checks.push(check_instance_expr(
-            &onto,
-            &i.individual,
-            &i.expr,
-            Expectation::Entailed,
-            &pm,
-            deadline,
-        ));
+        // `individual:` is a CURIE or a full `<IRI>` like every other
+        // entity-naming field (spec 7.2), resolved through the same
+        // prefix map before it ever reaches the reasoner. Do not
+        // silently fall back to the raw, unresolved token: that would
+        // ask the reasoner about an individual the author never
+        // meant, same reasoning as the `unsatisfiable` loop below.
+        match prefixes::expand(&pm, &i.individual) {
+            Ok(individual) => checks.push(check_instance_expr(
+                &onto,
+                &individual,
+                &i.expr,
+                Expectation::Entailed,
+                &pm,
+                deadline,
+            )),
+            Err(e) => checks.push(CheckOutcome {
+                name: format!("instance_of_expr individual: {}", i.individual),
+                verdict: Verdict::Indeterminate(IndeterminateReason::OracleError(e.to_string())),
+            }),
+        }
     }
     for e in &case.satisfiable_expr {
         checks.push(check_satisfiable_expr(

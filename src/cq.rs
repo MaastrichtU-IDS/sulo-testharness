@@ -11,6 +11,26 @@
 //! `expect_rows` token `rows::parse_expected` rejects) is the case
 //! author's configuration error, not an ontology regression, so it is
 //! `Indeterminate`, never a silent `Fail`.
+//!
+//! **Read this before writing a query over `hasPart` or `isPartOf`.**
+//! Both are `owl:ReflexiveProperty`, and `materialize` injects the
+//! self-loop `x hasPart x` / `x isPartOf x` for every named
+//! individual (spec section 8 step 6, `materialize.rs`'s own module
+//! doc). This is deliberate and required by the reflexivity cases, not
+//! a defect: without it, a CQ pattern `?x sulo:isPartOf ?x` would
+//! silently return nothing despite the axiom. But it also means a
+//! query like `?whole sulo:hasPart ?part` binds `?part` to `?whole`
+//! itself alongside every genuine part, which is usually not what the
+//! query wants. Add `FILTER (?part != ?whole)` (or the equivalent
+//! `NamedIndividual` version) whenever the self-loop is not the answer
+//! being asked for; hit and fixed once already in
+//! `suites/sulo/patterns/solid/queries/value-quality-unit.rq`.
+//!
+//! Also read the `not_entails` limitation on `manifest::Case::entails`
+//! before writing `expect_rows` for a language-tagged literal
+//! (`"..."@lang`): rustdl cannot positively confirm one by any path
+//! this crate uses, so it can never appear as a bound, matched value
+//! in a passing CQ row either.
 
 use std::collections::BTreeMap;
 use std::path::Path;

@@ -25,7 +25,7 @@ not_entails_manchester:
   - sub_expr: "ex:A"
     sup_expr: "ex:B"
 instance_of_expr:
-  - individual: "http://example.org/i1"
+  - individual: "ex:i1"
     expr: "ex:A and ex:p some ex:C"
 satisfiable_expr:
   - "ex:A and ex:p some ex:C"

@@ -54,19 +54,18 @@ directions of every `owl:inverseOf` pair rather than assuming one
 implies the other; the note lives here, and on each affected case,
 so the redundancy reads as a finding, not a bug in the case.
 
-## `instance_of_expr`'s `individual:` field takes a full `<IRI>`, not a CURIE
+## `instance_of_expr`'s `individual:` field: FIXED in `src/suite.rs`
 
-Discovered while writing `hasfeature.yaml` and `isfeatureof.yaml`.
-Every other manifest field that names an entity (`prefixes`-driven
-Turtle fragments, `entails_manchester`'s `sub_expr`/`sup_expr`,
-`expect_rows`) resolves CURIEs against the shared prefix map (spec
-7.2). `instance_of_expr`'s `individual:` does not: `suite::run_case`
-passes it straight to `oracle::check_instance_expr`, which checks it
-against the ontology's declared individuals with no prefix expansion
-first. A CURIE there (`"ex:x"`) is checked verbatim against full IRIs
-and never matches, so the case reports `Indeterminate("ex:x does not
-appear as an individual in the ontology")` instead of running the
-check at all. The manifest schema's own worked example in spec
-section 7 writes `individual: "ex:encounter"` as a CURIE; as written,
-that example would not run. `individual:` in this suite's data is
-always written as a full `<IRI>` string to work around it.
+Discovered while writing `hasfeature.yaml` and `isfeatureof.yaml`,
+and fixed rather than worked around, per fix round 1 review:
+`instance_of_expr`'s `individual:` now resolves through the same
+prefix map every other entity-naming field uses (spec 7.2), via
+`prefixes::expand` in `suite::run_case`, matching how the
+`unsatisfiable` field is already handled. Before the fix,
+`suite::run_case` passed `individual:` straight to
+`oracle::check_instance_expr` with no prefix expansion, so a CURIE
+there (`"ex:x"`) was checked verbatim against full IRIs and never
+matched, and the manifest schema's own worked example in spec section
+7 (`individual: "ex:encounter"`) would not have run as written.
+`individual:` in this suite's data is a CURIE, like every other
+entity-naming field, now that it resolves correctly.
