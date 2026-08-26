@@ -152,15 +152,30 @@ jobs:
       # spells it; a different spelling of the same directory is
       # reported as re-baseline required rather than compared.
       #
-      # `set -e` is deliberately NOT used here. With it, the first run
-      # to exit non-zero would abort the step and the SECOND report
-      # would never be written, so the run that most needs a readable
-      # report is exactly the run that does not get one. The step's
-      # outcome is the text run's exit code, recorded and re-raised at
-      # the end.
+      # `set +e` is load-bearing, and the `+` is the load-bearing
+      # character. GitHub runs a `run:` step that names no `shell:` as
+      # `bash -e {0}`, so errexit is ON before the script's first line
+      # and `set -uo pipefail` does NOT clear it: `set -u` and `set -o`
+      # turn options on, and nothing here turns `-e` off but `set +e`.
+      #
+      # With errexit left on, the first `cargo run` to exit non-zero
+      # (5 on an unpinned divergence, 4 on a stale pin, 3 on an
+      # unanswered question, 2 on a misconfiguration) aborts the step
+      # at that pipeline. `differential.json` is never written, the
+      # `echo` and the explicit `exit` never run, and the upload step's
+      # `if-no-files-found: warn` downgrades the missing report to a
+      # warning nobody reads. The machine-readable report would exist
+      # only on the runs that did not need it.
+      #
+      # This step has been "fixed" once before by reordering the lines
+      # while leaving the `-e` in place, so: the ordering was never the
+      # bug, the inherited errexit was. `tests/action.rs`
+      # (`the_differential_step_does_not_inherit_errexit`) executes
+      # this script's `set` line under `bash -e` and asserts errexit is
+      # off afterwards.
       - name: Differential
         run: |
-          set -uo pipefail
+          set +e -uo pipefail
           cargo run --release -- differential \
             --suite suites/sulo \
             --ontology ../sulo/sulo.ttl \

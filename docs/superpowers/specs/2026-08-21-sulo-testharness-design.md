@@ -308,8 +308,19 @@ The JVM stays out of the default and local path. It is a CI job only.
 - `2` harness or configuration error (bad YAML, missing file, parse failure)
 - `3` any Indeterminate, unless `--allow-indeterminate`, which lowers 3 to 0
   and can never suppress a `Fail` (Fail outranks Indeterminate in aggregation)
-- `4` golden closure drift, or re-baseline required
-- `5` oracle divergence between rustdl and HermiT
+- `4` golden closure drift, or re-baseline required; also the `differential`
+  subcommand's stale pin, meaning a divergence the pin describes that no longer
+  occurs, or a pin whose provenance header does not match this run (ruling 13:
+  that is the opposite finding to a `5`, so it does not share the code)
+- `5` oracle divergence between rustdl and HermiT, meaning a divergence no pin
+  describes
+
+Precedence within `differential` is `5` over `4` over `3` over `0`. A live
+disagreement is news about the two reasoners; a stale or uncomparable pin is
+news about the pin, and the report is printed either way so a `4` never hides a
+`5`. A PINNED divergence whose question came back Indeterminate is UNCONFIRMED,
+which is `3` and not `0` or `4`: a question HermiT could not answer is evidence
+of nothing in either direction.
 
 Check verdicts aggregate worst-first within a case: Fail beats Indeterminate
 beats unrefuted Pass beats Pass.
@@ -925,9 +936,22 @@ sulo-testharness run --suite <dir> [--ontology <ttl>] [--filter <substr>]
 sulo-testharness differential --suite <dir> --ontology <ttl> --robot <jar>
                               [--filter <substr>] [--format text|json]
                               [--workdir <dir>]
+                              [--divergences <file>] [--accept-divergences]
 
 sulo-testharness golden --ontology <ttl> --golden <file> [--accept-golden]
 ```
+
+`--divergences` names the pinned set of KNOWN divergences
+(`suites/sulo.divergences`), and it, not the raw divergence count, is what
+decides a pinned run's exit code: a divergence the pin describes is documented
+and exits `0`, one it does not is `5`, and one the pin describes that no longer
+occurs is `4` (ruling 12 and ruling 13 of the differential plan). It cannot be
+combined with `--filter`, because a pin claims a specific set is the WHOLE set
+the suite produces and a filtered run never asks the questions outside the
+filter. `--accept-divergences` re-baselines the pin, mirroring `--accept-golden`,
+and is refused over a run holding an Indeterminate: accepting from a run with a
+broken jar would write an empty pin and leave a permanently green job that
+asserted nothing.
 
 `differential` is its own subcommand rather than a flag on `run` because it
 needs a JVM and a ROBOT jar, and neither may leak into the default or local
@@ -981,9 +1005,18 @@ the only moment it would ever have spoken.
 
 So HermiT is promoted from transitional cross-check to the permanent oracle of
 record for the untrusted direction, per 5.3. It runs as a CI-only job, covering
-every negative assertion, every consistency verdict, and the cases marked
-`oracle: hermit` because rustdl cannot enforce them. The JVM stays out of the
-default and local path.
+every negative assertion, every consistency verdict, **every positive assertion
+rustdl reported as a `Fail` because it found no proof** (5.3, ruling 7: that
+`Fail` rests on absence of proof exactly as an unrefuted negative does), and the
+cases marked `oracle: hermit` because rustdl cannot enforce them. The JVM stays
+out of the default and local path.
+
+The job is weekly and on demand rather than on push, and it is green when the
+world matches the documented state: the one real disagreement is pinned in
+`suites/sulo.divergences` with both reasoners' answers, and the pin is diffed in
+both directions so that the day the gap CLOSES is a failure too. A job that is
+permanently red gets muted, and a muted alarm is the same defect as a check that
+cannot fail.
 
 ## 12. Error handling
 

@@ -171,6 +171,26 @@ enum Command {
     },
 }
 
+/// Print the differential report in the requested format.
+///
+/// One function rather than two call sites, because there are now two
+/// routes to a printed report (the ordinary one, and the stale-pin
+/// route below) and a format handled on only one of them would make
+/// `--format json` emit human text on exactly the run a machine
+/// consumer most needs to parse.
+fn emit_differential(
+    format: DiffFormat,
+    asked: &[sulo_testharness::differential::Asked],
+    opts: &DifferentialOptions,
+    pin: Option<&sulo_testharness::divergences::PinDiff>,
+) {
+    match format {
+        DiffFormat::Text => print!("{}", differential::render(asked, opts, pin)),
+        // JSON has no trailing newline of its own.
+        DiffFormat::Json => println!("{}", differential::render_json(asked, opts, pin)),
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
@@ -260,9 +280,22 @@ fn main() -> ExitCode {
             };
 
             // The pin, if one was asked for. `Rebaselined` and the
-            // two refusals short-circuit the report: none of them is
-            // a comparison, and printing a comparison-shaped report
+            // hard error short-circuit the report: neither is a
+            // comparison, and printing a comparison-shaped report
             // under them would invite the reader to treat it as one.
+            //
+            // `RebaselineRequired` does NOT short-circuit, and that is
+            // ruling 13 applied honestly. A stale or unreadable pin is
+            // a statement about the PIN; a divergence is a statement
+            // about the two reasoners, and ruling 13 puts 5 above 4.
+            // Returning 4 here without ever rendering the report meant
+            // a run holding a brand-new unreviewed divergence printed
+            // only "re-baseline required" and never named the
+            // disagreement: the pin's staleness outranking the very
+            // news the job exists to deliver. So the report is
+            // printed, unpinned (the pin could not be compared
+            // against, so there is no diff to show), and the exit code
+            // is the WORSE of 4 and what the questions themselves say.
             let pin = match opts.divergences {
                 None => None,
                 Some(path) => match check_pin(&asked, opts.suite, path, opts.accept_divergences) {
@@ -272,8 +305,20 @@ fn main() -> ExitCode {
                         return ExitCode::SUCCESS;
                     }
                     PinOutcome::RebaselineRequired(m) => {
-                        println!("re-baseline required: {m}");
-                        return ExitCode::from(4);
+                        emit_differential(format, &asked, &opts, None);
+                        // Under `--format json` stdout is ONE JSON
+                        // document, and a plain-text line appended to
+                        // it would make the file the CI job uploads
+                        // unparseable. The message is not part of the
+                        // payload (there is no pin diff to put it in),
+                        // so it goes to stderr there and to stdout in
+                        // the human format.
+                        match format {
+                            DiffFormat::Text => println!("re-baseline required: {m}"),
+                            DiffFormat::Json => eprintln!("re-baseline required: {m}"),
+                        }
+                        let code = std::cmp::max(4, differential_exit_code(&asked));
+                        return ExitCode::from(u8::try_from(code).unwrap_or(2));
                     }
                     PinOutcome::Error(m) => {
                         eprintln!("error: {m}");
@@ -282,12 +327,7 @@ fn main() -> ExitCode {
                 },
             };
 
-            match format {
-                DiffFormat::Text => print!("{}", differential::render(&asked, &opts, pin.as_ref())),
-                DiffFormat::Json => {
-                    println!("{}", differential::render_json(&asked, &opts, pin.as_ref()))
-                }
-            }
+            emit_differential(format, &asked, &opts, pin.as_ref());
 
             // Unpinned: 5 on any divergence, 3 on any question that
             // could not be answered, 0 only when every question was

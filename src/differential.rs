@@ -1543,13 +1543,67 @@ pub fn differential_exit_code(asked: &[Asked]) -> i32 {
 /// the overstatement this project exists to avoid: the two reasoners
 /// may have been asked DIFFERENT questions, if a probe encoding is
 /// wrong. The probe is on disk, so the reader can check.
+///
+/// # `hermit_found_the_case_inconsistent`, and why it changes the words
+///
+/// The paragraphs above hold only while the case's ontology-plus-data
+/// has a model. When HermiT's answer to the CASE's consistency gate is
+/// INCONSISTENT, everything inside that case is entailed vacuously,
+/// and two of the sentences this function would otherwise write become
+/// false:
+///
+/// * "not a finding about the ontology" is exactly backwards. HermiT
+///   found the ontology under test, plus this case's data, to have no
+///   model at all. On a `gate: expected consistent` case that is the
+///   most severe finding this harness can produce, and calling it a
+///   rustdl quirk buries it.
+/// * "it settles it AGAINST a SULO regression" is unearned. HermiT
+///   proves every failing positive in such a case, including ones no
+///   ontology entails, because an inconsistent ontology entails
+///   everything. That proof settles nothing about the assertion.
+///
+/// So the caller passes whether HermiT found THIS question's case
+/// inconsistent (see [`cases_hermit_found_inconsistent`]), and both
+/// sentences are replaced by the vacuity and a pointer at the gate.
+/// Callers that have only one question in hand and no case context
+/// pass `false`, which is the pre-existing wording.
 #[must_use]
-pub fn explain_divergence(origin: Origin, rustdl: Answer, hermit: Answer) -> String {
+pub fn explain_divergence(
+    origin: Origin,
+    rustdl: Answer,
+    hermit: Answer,
+    hermit_found_the_case_inconsistent: bool,
+) -> String {
     let direction = if !rustdl.rests_on_a_proof() && hermit.rests_on_a_proof() {
+        let reading = match (hermit_found_the_case_inconsistent, origin) {
+            // The gate divergence itself. rustdl is still the outlier
+            // and still incomplete, but what it missed is a clash in
+            // the ontology under test plus this case's data, which is
+            // a finding about the ontology and the one to read first.
+            (true, Origin::Gate) => {
+                "That is a rustdl INCOMPLETENESS on this query, and it IS a finding about \
+                 the ontology: HermiT found the ontology under test, plus this case's \
+                 data, to have NO MODEL. Read this divergence before any other in the \
+                 case. An inconsistent ontology entails everything, so every proof HermiT \
+                 exhibits elsewhere in this case is vacuous."
+            }
+            // Any other question in a case HermiT found inconsistent.
+            // HermiT proves it because it proves everything there.
+            (true, _) => {
+                "HermiT also answered this case's consistency gate INCONSISTENT, so it \
+                 found the ontology under test, plus this case's data, to have NO MODEL. \
+                 An inconsistent ontology entails everything, which means HermiT's proof \
+                 here is VACUOUS and says nothing about rustdl or about this assertion. \
+                 The gate divergence is the finding to read first."
+            }
+            (false, _) => {
+                "That is a rustdl INCOMPLETENESS on this query, not a finding about the \
+                 ontology."
+            }
+        };
         format!(
             "rustdl is the outlier: HermiT exhibited a proof ({hermit}) that rustdl did \
-             not find ({rustdl}). That is a rustdl INCOMPLETENESS on this query, not a \
-             finding about the ontology."
+             not find ({rustdl}). {reading}"
         )
     } else if rustdl.rests_on_a_proof() && !hermit.rests_on_a_proof() {
         format!(
@@ -1570,21 +1624,39 @@ pub fn explain_divergence(origin: Origin, rustdl: Answer, hermit: Answer) -> Str
         )
     };
 
-    let consequence = match origin {
-        Origin::FailingPositive => {
+    let consequence = match (origin, hermit_found_the_case_inconsistent) {
+        (Origin::FailingPositive, false) => {
             " The `run` subcommand reports this check as a Fail resting on absence of \
              proof; this divergence settles that message, and it settles it AGAINST a \
              SULO regression."
         }
-        Origin::Gate => {
+        // Same Fail, but HermiT's proof of it is vacuous, so the
+        // divergence settles NOTHING about it. Saying otherwise would
+        // clear a real regression on the strength of a proof that
+        // holds for every sentence alike.
+        (Origin::FailingPositive, true) => {
+            " The `run` subcommand reports this check as a Fail resting on absence of \
+             proof. This divergence does NOT settle that message in either direction: \
+             HermiT proves this and every other assertion in the case, because the case \
+             is inconsistent under it."
+        }
+        (Origin::Gate, _) => {
             " This is the case's consistency gate, so every other check in \
              the case was judged against a consistency verdict the two reasoners do not \
              share."
         }
-        Origin::Unrefuted => {
+        (Origin::Unrefuted, false) => {
             " The `run` subcommand reports this check as an \
              UnrefutedPass, a verdict that rests on exactly the absence of proof this \
              divergence contradicts."
+        }
+        // The UnrefutedPass still rests on an absence, but a vacuous
+        // proof does not contradict it: the case's inconsistency is
+        // what the reader has to resolve first.
+        (Origin::Unrefuted, true) => {
+            " The `run` subcommand reports this check as an UnrefutedPass. A vacuous \
+             proof does not refute that pass; resolve the case's inconsistency first, \
+             then re-read this question."
         }
     };
 
@@ -1593,6 +1665,36 @@ pub fn explain_divergence(origin: Origin, rustdl: Answer, hermit: Answer) -> Str
          question was built from: a probe that asks a different question than rustdl was \
          asked would show up here too."
     )
+}
+
+/// The case ids whose consistency gate HermiT answered INCONSISTENT
+/// while rustdl did not.
+///
+/// Inside such a case HermiT entails everything, so every proof it
+/// exhibits there is vacuous and [`explain_divergence`] must not read
+/// those proofs as findings about rustdl or about the assertion. See
+/// that function's docs for the two sentences this switches off.
+///
+/// Only [`Comparison::Divergence`] gates count, and deliberately. A
+/// gate both reasoners answered INCONSISTENT means rustdl found the
+/// clash too, and `suite::run_case` then SKIPS the case's remaining
+/// checks, so rustdl has no answer to any other question in the case
+/// and every one of them is [`Comparison::Indeterminate`]: there is no
+/// divergence note in that case for this set to correct. Widening the
+/// filter to cover it would add a branch nothing can reach.
+#[must_use]
+pub fn cases_hermit_found_inconsistent(asked: &[Asked]) -> BTreeSet<String> {
+    asked
+        .iter()
+        .filter_map(|a| match &a.comparison {
+            Comparison::Divergence {
+                question,
+                hermit: Answer::Inconsistent,
+                ..
+            } if question.origin == Origin::Gate => Some(question.case_id.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// What an AGREEMENT means, where it means more than "both said the
@@ -1652,6 +1754,10 @@ fn tally(asked: &[Asked]) -> (usize, usize, usize) {
 /// above it, is what decides the exit code on a pinned run.
 #[must_use]
 pub fn render(asked: &[Asked], opts: &DifferentialOptions, pin: Option<&PinDiff>) -> String {
+    // Whole-run context, computed once: a divergence inside a case
+    // HermiT found inconsistent has to be explained differently from
+    // the same two answers in a case that has a model.
+    let vacuous = cases_hermit_found_inconsistent(asked);
     let mut out = String::new();
     out.push_str(&format!(
         "differential: rustdl vs HermiT\n  suite:    {}\n  ontology: {}\n  robot:    {}\n  probes:   {}\n\n",
@@ -1676,7 +1782,12 @@ pub fn render(asked: &[Asked], opts: &DifferentialOptions, pin: Option<&PinDiff>
                 question.asked,
                 rustdl,
                 hermit,
-                explain_divergence(question.origin, *rustdl, *hermit)
+                explain_divergence(
+                    question.origin,
+                    *rustdl,
+                    *hermit,
+                    vacuous.contains(&question.case_id)
+                )
             ));
         }
     }
@@ -1718,6 +1829,9 @@ pub fn render(asked: &[Asked], opts: &DifferentialOptions, pin: Option<&PinDiff>
 /// The same report as JSON.
 #[must_use]
 pub fn render_json(asked: &[Asked], opts: &DifferentialOptions, pin: Option<&PinDiff>) -> String {
+    // Same whole-run context the text report uses, so the two reports
+    // cannot disagree about what a divergence means.
+    let vacuous = cases_hermit_found_inconsistent(asked);
     let questions: Vec<serde_json::Value> = asked
         .iter()
         .map(|a| {
@@ -1748,7 +1862,13 @@ pub fn render_json(asked: &[Asked], opts: &DifferentialOptions, pin: Option<&Pin
                     map.insert("hermit".into(), hermit.to_string().into());
                     map.insert(
                         "note".into(),
-                        explain_divergence(question.origin, *rustdl, *hermit).into(),
+                        explain_divergence(
+                            question.origin,
+                            *rustdl,
+                            *hermit,
+                            vacuous.contains(&question.case_id),
+                        )
+                        .into(),
                     );
                 }
                 Comparison::Indeterminate { reason, .. } => {

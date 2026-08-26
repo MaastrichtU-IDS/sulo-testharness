@@ -115,13 +115,81 @@ was tested with it, so a consumer needs no toolchain:
   with: { ontology: sulo.ttl }
 ```
 
-Next is a HermiT differential. HermiT is complete for OWL 2 DL, so it is the
-oracle of record for exactly the answers soundness cannot vouch for: it can turn
-those 26 unrefuted checks into real proofs of non-entailment, and decide the one
-case the pinned reasoner cannot. Disagreement between the two reasoners is its
-own outcome, and is always loud: it does not mean SULO regressed, it means one
-of the two reasoners is wrong, which is the most valuable signal either could
-produce.
+## The second reasoner
+
+The 26 unrefuted checks are the honest limit of one incomplete reasoner. Getting
+past them needs a second one, so the harness now runs a HermiT differential.
+
+HermiT is complete for OWL 2 DL, which makes it the oracle of record for exactly
+the answers soundness cannot vouch for. Every question the harness answers out
+of an ABSENCE of proof is put to it: the consistency gate in both directions,
+the negative assertions and satisfiability checks whose verdict is
+`UnrefutedPass`, and, less obviously, the positive assertions that FAILED. A
+failing positive rests on absence of proof exactly as an unrefuted negative
+does, so scoping the differential to the negatives would have left the harness
+telling users that a `Fail` was settled elsewhere when nothing was settling it.
+
+Everything reduces to a consistency question, because that is the one primitive
+the two reasoners share. To ask whether SULO entails `C rdfs:subClassOf D`, the
+harness merges SULO with a small probe ontology defining `C and not D` and an
+individual of that class, and asks HermiT whether the result has a model. No
+model means the entailment holds. Each encoding was verified in both directions
+against real SULO before it was trusted, because the way a probe fails is not an
+error: a misparsed probe comes back consistent, consistent reads as "not
+entailed", and "not entailed" is what the first reasoner already said. A
+differential that only ever confirmed the reassuring direction would agree with
+itself forever while proving nothing.
+
+Disagreement is its own outcome and is always loud. It does not mean SULO
+regressed; it means one of the two reasoners is wrong about a specific query,
+and the report names which one and in which direction. The reasoner the harness
+runs by default is sound but incomplete, so it is always the outlier: it either
+missed a proof HermiT found, which is an incompleteness, or claimed one HermiT
+refutes, which would be an unsoundness and is the alarming direction.
+
+This runs in CI only, weekly and on demand. It needs a JVM and a ROBOT jar, and
+neither belongs on the path a contributor uses to check an edit.
+
+One real disagreement exists today and is recorded rather than silenced. SULO
+says a `sulo:TimeInstant` may only carry an `xsd:dateTime` or
+`xsd:dateTimeStamp` value; the pinned reasoner's loader drops that axiom as an
+unsupported data range, so it reports a `TimeInstant` with a string value
+consistent, while HermiT finds the clash. The case is checked in with both
+answers beside it, so a reader sees what the documented disagreement IS rather
+than only that one exists. The two reasoners agree about every other question
+the suite asks, so the job is green whenever the world matches the documented
+state, which is what keeps it from becoming an alarm nobody reads.
+
+The pin is diffed in both directions. A disagreement nobody has reviewed fails
+the job, and so does a pinned disagreement that has STOPPED happening: the gap
+closing means the reasoner gained a capability, or SULO changed, or the case
+moved, and that is news the harness exists to deliver rather than to absorb.
+Re-baselining is a deliberate act, and the checked-in pin is itself diffed
+against a table in the ordinary test suite, so it cannot be quietly regenerated
+and committed.
+
+## What is still open
+
+Two things, both stated rather than left to be discovered.
+
+The golden closure, which diffs SULO's inferred entailments against a
+checked-in baseline, is a real defence but a narrower one than its name
+suggests. Measured against the ten mutants, it catches two. Its sensitivity is
+exactly named class subsumption, satisfiability and equivalence, plus the named
+property hierarchy; it is structurally blind to property characteristics,
+property chains, domains and ranges, disjointness, covering axioms, and every
+ABox-level entailment. The number is written down in the code beside the
+measurement that produced it, and is to be re-measured when a mutant is added,
+not reasoned about. Widening that surface is the main piece of unfinished work.
+
+The consistency gate every case runs is unbounded. The pinned reasoner exposes
+no deadline-bearing consistency check, so the gate cannot honour a case's
+timeout and a pathological ontology would block the suite. Expressing the gate
+as a bounded satisfiability probe was tried and rejected: it agrees on every
+fixture here, but it skips the ABox pre-checks, and trading an unbounded gate
+for one that might MISS an inconsistency is the worse deal, since a missed
+inconsistency makes every check below it pass vacuously. It waits on rustdl
+[#74](https://github.com/MaastrichtU-IDS/rustdl/issues/74).
 
 ## Links
 

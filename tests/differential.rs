@@ -31,8 +31,8 @@ use std::path::{Path, PathBuf};
 
 use sulo_testharness::differential::{
     Answer, Asked, Comparison, DifferentialOptions, DifferentialOutcome, Origin, Probe, Provenance,
-    Question, QuestionKind, ask, compare, differential_exit_code, explain_agreement,
-    explain_divergence, no_questions_refusal, questions, run_differential,
+    Question, QuestionKind, ask, cases_hermit_found_inconsistent, compare, differential_exit_code,
+    explain_agreement, explain_divergence, no_questions_refusal, questions, run_differential,
 };
 use sulo_testharness::hermit::HermitAnswer;
 use sulo_testharness::manifest::{Case, InstanceExpr, SubsumptionExpr};
@@ -1415,14 +1415,10 @@ fn a_failing_positive_hermit_can_prove_diverges_and_names_rustdl() {
         } => {
             assert_eq!(rustdl, Answer::NotEntailed);
             assert_eq!(hermit, Answer::Entailed);
-            let note = explain_divergence(question.origin, rustdl, hermit);
+            let note = explain_divergence(question.origin, rustdl, hermit, false);
             assert!(
                 note.contains("rustdl is the outlier") && note.contains("INCOMPLETENESS"),
                 "the note must name the outlier and the defect: {note}"
-            );
-            assert!(
-                note.contains("AGAINST a SULO regression"),
-                "the note must say what this means for the run report's Fail: {note}"
             );
         }
         other => panic!(
@@ -1430,6 +1426,266 @@ fn a_failing_positive_hermit_can_prove_diverges_and_names_rustdl() {
              Agree here would mean the probe cannot clash"
         ),
     }
+
+    // ...but this case's own gate is where the proof came from, and
+    // the whole run knows that. HermiT answers the gate INCONSISTENT,
+    // so the `false` passed above is NOT what the report passes, and
+    // the wording the report actually prints must not read the vacuous
+    // proof as news about rustdl or about the assertion. This is the
+    // wiring, run end to end on the real jar.
+    let asked: Vec<Asked> = qs
+        .iter()
+        .map(|q| Asked {
+            provenance: q.provenance.clone(),
+            comparison: compare(q, &ask(&robot, q, &workdir("positive-diverge-all"))),
+        })
+        .collect();
+    let vacuous = cases_hermit_found_inconsistent(&asked);
+    assert!(
+        vacuous.contains("failing-positive-diverge"),
+        "HermiT answers this case's gate INCONSISTENT while rustdl does not, so the case \
+         must be recognised as one where HermiT's proofs are vacuous: {vacuous:?}"
+    );
+
+    let note = explain_divergence(
+        Origin::FailingPositive,
+        Answer::NotEntailed,
+        Answer::Entailed,
+        true,
+    );
+    assert!(
+        !note.contains("AGAINST a SULO regression"),
+        "a vacuous proof settles nothing, least of all against a regression: {note}"
+    );
+    assert!(
+        !note.contains("not a finding about the ontology"),
+        "HermiT found this case's ontology-plus-data inconsistent, which is precisely a \
+         finding about the ontology: {note}"
+    );
+    assert!(
+        note.contains("VACUOUS") && note.contains("gate divergence is the finding to read first"),
+        "the note must name the vacuity and point at the gate: {note}"
+    );
+}
+
+/// The ORDINARY failing-positive divergence, in a case whose ontology
+/// still has a model: HermiT found a proof rustdl missed, and there is
+/// nothing vacuous about it. The `Fail` the `run` subcommand reports IS
+/// settled, and settled against a SULO regression.
+///
+/// This is the branch the vacuity flag must not swallow. Without it the
+/// fix for the inconsistent-case wording could have been "delete the
+/// sentence", which would lose the signal spec 5.3 calls the most
+/// valuable either reasoner could produce.
+#[test]
+fn an_ordinary_failing_positive_divergence_still_settles_the_fail() {
+    let note = explain_divergence(
+        Origin::FailingPositive,
+        Answer::NotEntailed,
+        Answer::Entailed,
+        false,
+    );
+    assert!(
+        note.contains("AGAINST a SULO regression"),
+        "with a consistent case, HermiT's proof is real and settles the Fail: {note}"
+    );
+    assert!(
+        note.contains("not a finding about the ontology"),
+        "with a consistent case, the divergence really is about rustdl: {note}"
+    );
+    assert!(
+        !note.contains("VACUOUS"),
+        "nothing is vacuous in a case that has a model: {note}"
+    );
+}
+
+/// The gate divergence in an inconsistent case, which is the most
+/// severe finding this harness can produce and used to be reported as
+/// "not a finding about the ontology".
+#[test]
+fn an_inconsistent_gate_divergence_is_a_finding_about_the_ontology() {
+    let note = explain_divergence(Origin::Gate, Answer::Consistent, Answer::Inconsistent, true);
+    assert!(
+        !note.contains("not a finding about the ontology"),
+        "HermiT found the ontology plus this case's data to have no model; that is a \
+         finding about the ontology: {note}"
+    );
+    assert!(
+        note.contains("IS a finding about the ontology") && note.contains("NO MODEL"),
+        "the note must say what HermiT actually found: {note}"
+    );
+    assert!(
+        note.contains("Read this divergence before any other in the case"),
+        "the gate divergence is the one to read first: {note}"
+    );
+}
+
+/// An `UnrefutedPass` inside a case HermiT found inconsistent. The
+/// pass still rests on an absence, but a vacuous proof does not refute
+/// it, so the note must not claim the divergence contradicts it.
+#[test]
+fn a_vacuous_proof_does_not_refute_an_unrefuted_pass() {
+    let note = explain_divergence(
+        Origin::Unrefuted,
+        Answer::NotEntailed,
+        Answer::Entailed,
+        true,
+    );
+    assert!(
+        !note.contains("absence of proof this divergence contradicts"),
+        "a proof that holds for every sentence alike contradicts nothing: {note}"
+    );
+    assert!(
+        note.contains("A vacuous proof does not refute that pass"),
+        "the note must say why the UnrefutedPass still stands for now: {note}"
+    );
+
+    // And the ordinary case is untouched.
+    let ordinary = explain_divergence(
+        Origin::Unrefuted,
+        Answer::NotEntailed,
+        Answer::Entailed,
+        false,
+    );
+    assert!(
+        ordinary.contains("absence of proof this divergence contradicts"),
+        "in a case that has a model, HermiT's proof really does refute the pass: {ordinary}"
+    );
+}
+
+/// The set is empty when no gate diverged with HermiT saying
+/// INCONSISTENT, so the wording above cannot leak into an ordinary run.
+#[test]
+fn a_run_with_no_inconsistent_gate_names_no_vacuous_case() {
+    let asked = vec![
+        Asked {
+            provenance: Provenance {
+                case_id: "c".into(),
+                check: GATE_EXPECT_CONSISTENT.into(),
+                asked: "is the ontology, plus this case's data, consistent?".into(),
+                origin: Origin::Gate,
+            },
+            comparison: Comparison::Agree {
+                answer: Answer::Consistent,
+            },
+        },
+        Asked {
+            provenance: Provenance {
+                case_id: "c".into(),
+                check: "x instanceOf Y".into(),
+                asked: "does the ontology entail that x is a Y?".into(),
+                origin: Origin::FailingPositive,
+            },
+            comparison: Comparison::Divergence {
+                question: Provenance {
+                    case_id: "c".into(),
+                    check: "x instanceOf Y".into(),
+                    asked: "does the ontology entail that x is a Y?".into(),
+                    origin: Origin::FailingPositive,
+                },
+                rustdl: Answer::NotEntailed,
+                hermit: Answer::Entailed,
+            },
+        },
+    ];
+    assert!(
+        cases_hermit_found_inconsistent(&asked).is_empty(),
+        "a case whose gate both reasoners answered CONSISTENT is not a vacuous case"
+    );
+
+    let opts = DifferentialOptions {
+        suite: Path::new("suites/sulo"),
+        ontology: Path::new(SULO),
+        robot: Path::new("robot.jar"),
+        filter: None,
+        workdir: Path::new("probes"),
+        divergences: None,
+        accept_divergences: false,
+    };
+    let text = sulo_testharness::differential::render(&asked, &opts, None);
+    assert!(
+        text.contains("AGAINST a SULO regression"),
+        "the report must still settle an ordinary failing positive: {text}"
+    );
+}
+
+/// The same two questions, with the gate DIVERGING and HermiT saying
+/// INCONSISTENT. Both reports, text and JSON, must switch wording, and
+/// this is the test that pins the wiring rather than the function.
+#[test]
+fn a_report_over_an_inconsistent_case_calls_its_proofs_vacuous() {
+    let gate = Provenance {
+        case_id: "c".into(),
+        check: GATE_EXPECT_CONSISTENT.into(),
+        asked: "is the ontology, plus this case's data, consistent?".into(),
+        origin: Origin::Gate,
+    };
+    let positive = Provenance {
+        case_id: "c".into(),
+        check: "x instanceOf Y".into(),
+        asked: "does the ontology entail that x is a Y?".into(),
+        origin: Origin::FailingPositive,
+    };
+    let asked = vec![
+        Asked {
+            provenance: gate.clone(),
+            comparison: Comparison::Divergence {
+                question: gate,
+                rustdl: Answer::Consistent,
+                hermit: Answer::Inconsistent,
+            },
+        },
+        Asked {
+            provenance: positive.clone(),
+            comparison: Comparison::Divergence {
+                question: positive,
+                rustdl: Answer::NotEntailed,
+                hermit: Answer::Entailed,
+            },
+        },
+    ];
+
+    let opts = DifferentialOptions {
+        suite: Path::new("suites/sulo"),
+        ontology: Path::new(SULO),
+        robot: Path::new("robot.jar"),
+        filter: None,
+        workdir: Path::new("probes"),
+        divergences: None,
+        accept_divergences: false,
+    };
+
+    let text = sulo_testharness::differential::render(&asked, &opts, None);
+    assert!(
+        !text.contains("AGAINST a SULO regression")
+            && !text.contains("not a finding about the ontology"),
+        "neither sentence is true of a case HermiT found inconsistent: {text}"
+    );
+    assert!(
+        text.contains("NO MODEL") && text.contains("VACUOUS"),
+        "the report must name the inconsistency and the vacuity: {text}"
+    );
+
+    let json = sulo_testharness::differential::render_json(&asked, &opts, None);
+    let payload: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    let notes: Vec<String> = payload["questions"]
+        .as_array()
+        .expect("questions array")
+        .iter()
+        .map(|q| q["note"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(notes.len(), 2, "{json}");
+    assert!(
+        notes
+            .iter()
+            .all(|n| !n.contains("AGAINST a SULO regression")
+                && !n.contains("not a finding about the ontology")),
+        "the JSON report must not contradict the text one: {json}"
+    );
+    assert!(
+        notes.iter().any(|n| n.contains("VACUOUS")),
+        "the JSON report must carry the vacuity too: {json}"
+    );
 }
 
 /// The other direction of `explain_divergence`, which no fixture in
@@ -1438,7 +1694,12 @@ fn a_failing_positive_hermit_can_prove_diverges_and_names_rustdl() {
 /// with the reassuring incompleteness wording.
 #[test]
 fn a_proof_hermit_refutes_is_reported_as_unsoundness() {
-    let note = explain_divergence(Origin::Unrefuted, Answer::Entailed, Answer::NotEntailed);
+    let note = explain_divergence(
+        Origin::Unrefuted,
+        Answer::Entailed,
+        Answer::NotEntailed,
+        false,
+    );
     assert!(
         note.contains("UNSOUNDNESS") && note.contains("rustdl is the outlier"),
         "the alarming direction must be named as such: {note}"

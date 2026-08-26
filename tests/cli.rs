@@ -469,15 +469,25 @@ fn a_differential_with_an_unusable_jar_exits_two() {
 /// another is refused.
 const RESTRICTIONS: &str = "suites/sulo/restrictions";
 
+/// A sub-suite the two reasoners AGREE about, end to end. Needed by
+/// the stale-pin rows: ruling 13 puts a live divergence above a stale
+/// pin, so a run that still diverges can no longer be used to observe
+/// exit 4 on its own.
+const PROPERTIES: &str = "suites/sulo/properties";
+
 /// Write a pin file for `RESTRICTIONS` holding exactly `rows`.
 ///
 /// The reasoner version comes from the same constant the harness
 /// writes, so a version bump does not turn these rows into a
 /// re-baseline prompt.
 fn write_pin(dir: &Path, name: &str, rows: &[&str]) -> PathBuf {
+    write_pin_for(RESTRICTIONS, dir, name, rows)
+}
+
+fn write_pin_for(suite: &str, dir: &Path, name: &str, rows: &[&str]) -> PathBuf {
     let path = dir.join(name);
     let mut text = format!(
-        "# suite: {RESTRICTIONS}\n# reasoner: {}\n",
+        "# suite: {suite}\n# reasoner: {}\n",
         sulo_testharness::golden::REASONER_VERSION
     );
     for row in rows {
@@ -493,11 +503,15 @@ const REAL_ROW: &str =
     "timeinstant-datarange\tgate: expected inconsistent\tgate\tconsistent\tinconsistent";
 
 fn pinned_differential(jar: &Path, pin: &Path, scratch_name: &str) -> Output {
+    pinned_differential_over(RESTRICTIONS, jar, pin, scratch_name)
+}
+
+fn pinned_differential_over(suite: &str, jar: &Path, pin: &Path, scratch_name: &str) -> Output {
     let workdir = scratch(scratch_name);
     run(&[
         "differential",
         "--suite",
-        RESTRICTIONS,
+        suite,
         "--ontology",
         SULO,
         "--robot",
@@ -650,12 +664,21 @@ fn accepting_a_pin_that_was_never_named_is_refused() {
 }
 
 /// A pin recorded against a different reasoner is exit 4 from the
-/// binary, not a comparison.
+/// binary, not a comparison, AND the questions are still reported.
 ///
 /// Covers `main`'s routing of `PinOutcome::RebaselineRequired`, which
 /// no unit test can reach: `check_pin` returning the variant and the
 /// process returning 4 are two different claims, and only this one
 /// observes the second.
+///
+/// Run over `PROPERTIES`, where the two reasoners agree about
+/// everything, so 4 is the whole story. Over a sub-suite that still
+/// diverges the answer is 5 (ruling 13), which the row below observes.
+///
+/// The report assertion is not decoration. This route used to return 4
+/// BEFORE rendering anything, so a run holding a live disagreement
+/// printed one line about the pin and never named the disagreement:
+/// the pin's staleness outranking the news the job exists to deliver.
 #[test]
 fn a_pin_from_another_reasoner_exits_four_from_the_binary() {
     require_sulo();
@@ -665,11 +688,11 @@ fn a_pin_from_another_reasoner_exits_four_from_the_binary() {
     let path = dir.join("old.divergences");
     std::fs::write(
         &path,
-        format!("# suite: {RESTRICTIONS}\n# reasoner: rustdl v0.0.1-ancient\n{REAL_ROW}\n"),
+        format!("# suite: {PROPERTIES}\n# reasoner: rustdl v0.0.1-ancient\n"),
     )
     .expect("the scratch pin should be writable");
 
-    let out = pinned_differential(&jar, &path, "pin-version-probes");
+    let out = pinned_differential_over(PROPERTIES, &jar, &path, "pin-version-probes");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(
         out.status.code(),
@@ -680,5 +703,104 @@ fn a_pin_from_another_reasoner_exits_four_from_the_binary() {
     assert!(
         stdout.contains("re-baseline required") && stdout.contains("v0.0.1-ancient"),
         "the message must name what was stale:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("differential: rustdl vs HermiT") && stdout.contains("question(s):"),
+        "an uncomparable pin is a statement about the PIN; the questions were still asked \
+         and must still be reported:\n{stdout}"
+    );
+}
+
+/// `--format json` on the stale-pin route still emits ONE parseable
+/// JSON document.
+///
+/// The CI job runs the differential twice, text and JSON, and uploads
+/// both. Rendering the report on this route (see the row above) means
+/// stdout now carries a JSON payload here, so the human-readable
+/// "re-baseline required" line has to go somewhere that is not the
+/// middle of that document.
+#[test]
+fn a_stale_pin_in_json_format_still_emits_parseable_json() {
+    require_sulo();
+    let Some(jar) = robot_jar() else { return };
+
+    let dir = scratch("pin-version-json");
+    let path = dir.join("old.divergences");
+    std::fs::write(
+        &path,
+        format!("# suite: {PROPERTIES}\n# reasoner: rustdl v0.0.1-ancient\n"),
+    )
+    .expect("the scratch pin should be writable");
+
+    let workdir = scratch("pin-version-json-probes");
+    let out = run(&[
+        "differential",
+        "--suite",
+        PROPERTIES,
+        "--ontology",
+        SULO,
+        "--robot",
+        jar.to_str().expect("the jar path is UTF-8"),
+        "--workdir",
+        workdir.to_str().expect("the scratch path is UTF-8"),
+        "--divergences",
+        path.to_str().expect("the pin path is UTF-8"),
+        "--format",
+        "json",
+    ]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(4), "stdout:\n{stdout}");
+    let payload: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout must be one JSON document: {e}\n{stdout}"));
+    assert_eq!(
+        payload["summary"]["exit_code"], 0,
+        "the payload reports what the QUESTIONS say; the 4 comes from the pin, which \
+         could not be compared against and so has no diff in the payload:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("re-baseline required") && stderr.contains("v0.0.1-ancient"),
+        "the pin message must still be reported, on stderr:\n{stderr}"
+    );
+}
+
+/// Ruling 13's precedence, in the one place it was inverted: 5 over 4.
+///
+/// A stale-provenance pin over a sub-suite that genuinely diverges is
+/// not a 4. The pin cannot be compared against, which is news about
+/// the pin; the two reasoners disagreeing about `timeinstant-
+/// datarange` is news about SULO and rustdl, and ruling 13 ranks the
+/// live disagreement higher. A reader handed a 4 here would go and fix
+/// the pin without ever learning that anything diverged.
+#[test]
+fn a_live_divergence_outranks_a_stale_pin_and_is_still_named() {
+    require_sulo();
+    let Some(jar) = robot_jar() else { return };
+
+    let dir = scratch("pin-stale-and-diverging");
+    let path = dir.join("ancient.divergences");
+    std::fs::write(
+        &path,
+        format!("# suite: {RESTRICTIONS}\n# reasoner: rustdl v0.0.1-ancient\n"),
+    )
+    .expect("the scratch pin should be writable");
+
+    let out = pinned_differential(&jar, &path, "pin-stale-and-diverging-probes");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(5),
+        "ruling 13: a live disagreement outranks an uncomparable pin. stdout:\n{stdout}\n\
+         stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout.contains("DIVERGENCE") && stdout.contains("timeinstant-datarange"),
+        "the disagreement must be NAMED, not swallowed by the pin's staleness:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("re-baseline required") && stdout.contains("v0.0.1-ancient"),
+        "the pin problem must be reported too; the exit code just does not belong to \
+         it:\n{stdout}"
     );
 }
