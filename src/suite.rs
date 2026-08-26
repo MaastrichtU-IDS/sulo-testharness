@@ -21,13 +21,14 @@
 //!    via `CheckOutcome::rests_on_absence` instead; see
 //!    `downgrade_for_loss` and `cq::check_cq`.
 
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::claim::{Claim, parse_fragment};
 use crate::cq::check_cq;
 use crate::load::{load_file, merge};
-use crate::manifest::Case;
+use crate::manifest::{Case, load_case};
 use crate::materialize::materialize;
 use crate::oracle::{
     Expectation, NO_PROOF_MARKER, check, check_instance_expr, check_satisfiable_expr,
@@ -204,11 +205,10 @@ pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
     let pm = with_overrides(&base_mapping(), &case.prefixes);
 
     // The case's own time budget, per check. A `timeout_ms` of 0
-    // means "expire immediately" (a deterministic Timeout on every
-    // check it governs), not "no limit": that matches the zero-
-    // deadline seam `holds_with_deadline` already uses elsewhere in
-    // this crate to force a Timeout without relying on a real
-    // reasoner call being slow. See `manifest::Case::timeout_ms`.
+    // means "expire immediately", not "no limit". It forces a Timeout
+    // only on work that actually consults the deadline, which is not
+    // every check: see `manifest::Case::timeout_ms`, where the
+    // measurement and the earlier overstatement are recorded.
     let deadline = Duration::from_millis(case.timeout_ms);
 
     // Gate: consistency before anything else. An inconsistent
@@ -440,4 +440,452 @@ pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
         skipped: false,
         baseline_loss,
     }
+}
+
+/// Directory names holding fixtures rather than cases.
+///
+/// A `.yaml` under one of these is data for a case, never a case
+/// itself, so `discover` does not descend into them. Named once here
+/// so the walk and the error message that mentions them cannot drift
+/// apart.
+pub const FIXTURE_DIRS: [&str; 2] = ["data", "queries"];
+
+/// Everything that stops a run before any case is judged.
+///
+/// Every variant is a configuration error (exit code 2 per spec 5.4),
+/// never a verdict about the ontology: a suite that could not be read
+/// has told us nothing about SULO, and reporting it as a failing case
+/// would look exactly like an ontology regression.
+#[derive(Debug, thiserror::Error)]
+pub enum SuiteError {
+    #[error(
+        "suite root {path} does not exist: pass --suite the path to a directory \
+         of case manifests"
+    )]
+    RootMissing { path: PathBuf },
+    #[error(
+        "suite root {path} is not a directory: pass --suite a directory of case \
+         manifests, not a single file"
+    )]
+    RootNotDirectory { path: PathBuf },
+    #[error("cannot read {path}: {source}")]
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error(
+        "suite root {path} holds no case manifests, so this run would check \
+         nothing and still report a pass: add a *.yaml case, or point --suite at \
+         the directory that holds them. Note that a *.yaml inside a data/ or \
+         queries/ directory is a fixture and is deliberately not discovered."
+    )]
+    NoCases { path: PathBuf },
+    #[error(
+        "{path} has the extension .yml, but case manifests are discovered as \
+         *.yaml only, so this file would be read by nobody and reported by \
+         nothing. Rename it to .yaml. (A *.yml inside a data/ or queries/ \
+         directory is a fixture, not a case, and is not refused.)"
+    )]
+    StrayYml { path: PathBuf },
+    #[error(
+        "--deferred only was requested, but none of the {selected} selected \
+         case(s) under {path} carries the `{tag}` tag, so this run would check \
+         nothing and still report a pass"
+    )]
+    NoDeferredCases {
+        path: PathBuf,
+        selected: usize,
+        tag: &'static str,
+    },
+    #[error(
+        "every one of the {selected} selected case(s) under {path} carries the \
+         `{tag}` tag and is deferred by default, so this run would check nothing \
+         and still report a pass. Pass --deferred include or --deferred only to \
+         execute them."
+    )]
+    AllCasesDeferred {
+        path: PathBuf,
+        selected: usize,
+        tag: &'static str,
+    },
+}
+
+/// Find every case manifest under `root`, sorted.
+///
+/// Recursive, `*.yaml` only, skipping any directory named in
+/// `FIXTURE_DIRS`. Sorted so that the report, the JSON payload and the
+/// JUnit file come out in the same order on every machine, which is
+/// what makes two runs diffable.
+///
+/// # Zero cases is an error, not a pass
+///
+/// A suite root that silently matches nothing is a check that cannot
+/// fail: the run would report a confident green having asked the
+/// reasoner nothing at all. It is refused here (`NoCases`) rather than
+/// aggregated into a Pass over an empty set.
+///
+/// # The fixture-directory skip is relative to `root`
+///
+/// Only components BELOW `root` are inspected. A checkout that happens
+/// to live under a directory called `data` (say
+/// `/home/me/data/sulo-testharness`) would otherwise discover nothing
+/// anywhere, which is the same silent-empty-suite failure wearing a
+/// different hat. Pointing `--suite` directly at a fixture directory
+/// therefore does discover the fixtures, and each one then fails to
+/// load as a manifest, which is exit 2 and an honest message rather
+/// than a green run.
+pub fn discover(root: &Path) -> Result<Vec<PathBuf>, SuiteError> {
+    if !root.exists() {
+        return Err(SuiteError::RootMissing {
+            path: root.to_path_buf(),
+        });
+    }
+    if !root.is_dir() {
+        return Err(SuiteError::RootNotDirectory {
+            path: root.to_path_buf(),
+        });
+    }
+
+    let mut found = Vec::new();
+    walk(root, &mut found)?;
+
+    if found.is_empty() {
+        return Err(SuiteError::NoCases {
+            path: root.to_path_buf(),
+        });
+    }
+
+    found.sort();
+    Ok(found)
+}
+
+fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), SuiteError> {
+    let entries = std::fs::read_dir(dir).map_err(|source| SuiteError::Io {
+        path: dir.to_path_buf(),
+        source,
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|source| SuiteError::Io {
+            path: dir.to_path_buf(),
+            source,
+        })?;
+        let path = entry.path();
+
+        // `path.is_dir()` rather than `entry.file_type()`: the former
+        // follows symlinks, so a suite assembled out of symlinked
+        // group directories still walks.
+        if path.is_dir() {
+            if FIXTURE_DIRS
+                .iter()
+                .any(|d| entry.file_name().as_os_str() == *d)
+            {
+                continue;
+            }
+            walk(&path, out)?;
+        } else if path.extension().is_some_and(|e| e == "yaml") {
+            out.push(path);
+        } else if path.extension().is_some_and(|e| e == "yml") {
+            // Refused, not skipped. Discovery matches `*.yaml`, so a
+            // `.yml` case would be passed over in silence: an author
+            // would see a green run over 65 cases and have no way to
+            // learn that their 66th was never read. That is this
+            // project's recurring defect shape (a check that cannot
+            // fail) arriving through a filename. One convention,
+            // enforced loudly. Fixture directories never reach here,
+            // because the branch above skips them without descending,
+            // so a `data/*.yml` query fixture stays legal.
+            return Err(SuiteError::StrayYml { path });
+        }
+    }
+
+    Ok(())
+}
+
+/// The tag marking a case whose oracle of record is HermiT, not the
+/// pinned rustdl build.
+///
+/// Spec line 746: a case asserting something rustdl provably cannot
+/// enforce (today, `TimeInstant subClassOf hasValue only
+/// (dateTime or dateTimeStamp)`, a data-range `allValuesFrom`) carries
+/// `oracle: hermit` and "runs only in the CI differential (5.3)".
+/// Running it under rustdl and reporting the result as a `Fail` would
+/// be exactly the overstatement this harness exists to prevent: it
+/// would say SULO regressed when in fact the reasoner cannot see the
+/// axiom, and `load.rs` logs baseline loss for that very axiom on
+/// every load.
+pub const DEFERRED_TAG: &str = "oracle-hermit";
+
+/// Why a deferred case did not run. One constant, so the text a
+/// consumer reads is the same in every report format.
+pub const DEFERRED_REASON: &str = "tagged `oracle-hermit`: the pinned reasoner provably cannot decide this case, so its oracle of record is the CI differential (spec 5.3), which is NOT yet built (phase 7), so this case is currently checked by nothing. Not counted toward the exit code. Pass --deferred include or --deferred only to execute it anyway.";
+
+/// What a run does with the cases carrying [`DEFERRED_TAG`].
+///
+/// ONE flag with three values rather than two booleans, for the same
+/// reason `--format` is one flag: `--include-deferred --only-deferred`
+/// would otherwise be a request the program has to resolve by
+/// silently preferring one.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum DeferredCases {
+    /// Name them, count them, do not run them, and keep them out of
+    /// the aggregate. The default, and what spec line 746 asks for.
+    #[default]
+    Skip,
+    /// Run them alongside everything else, letting them set the exit
+    /// code like any other case. For someone deliberately checking
+    /// whether the reasoner has caught up.
+    Include,
+    /// Run ONLY them. This is the seam the phase 7 HermiT differential
+    /// (spec 5.3) will drive: that job needs to execute exactly the
+    /// cases whose oracle of record it is.
+    Only,
+}
+
+/// A case that was selected, named, and counted, but deliberately not
+/// run.
+///
+/// It exists as its own type rather than as a fifth `Verdict` because
+/// it is not a verdict: nothing was asked of the reasoner, so there is
+/// nothing to be honest or dishonest about. Keeping it out of
+/// `CaseResult` also makes it structurally impossible for a deferred
+/// case to reach `aggregate_cases` and set an exit code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeferredCase {
+    pub id: String,
+    /// The manifest this case was read from, so a reader can go and
+    /// look at it.
+    pub path: PathBuf,
+    /// Human-readable explanation; today always [`DEFERRED_REASON`].
+    pub reason: String,
+}
+
+/// What one whole-suite run was asked to do.
+pub struct RunOptions<'a> {
+    /// Directory to discover cases under.
+    pub suite: &'a Path,
+    /// Ontology used by every case that does not name its own
+    /// `ontology:`. Optional, because a suite in which every case
+    /// carries its own ontology needs none; a case that needs it and
+    /// does not have it is a configuration error, not a silent load
+    /// failure reported as a bad ontology.
+    pub ontology: Option<&'a Path>,
+    /// Substring matched against the manifest PATH (not the case id,
+    /// which is not known until the manifest is read). Case ids in
+    /// this repository are the file stems, so `--filter taxonomy`
+    /// selects a group and `--filter deep-chain` selects one case.
+    pub filter: Option<&'a str>,
+    /// What to do with cases tagged [`DEFERRED_TAG`]. See
+    /// [`DeferredCases`]; the default, `Skip`, is what spec line 746
+    /// asks for.
+    pub deferred: DeferredCases,
+}
+
+/// The result of one whole-suite run.
+pub enum RunOutcome {
+    /// Every selected case that was not deferred ran. `results` is
+    /// guaranteed non-empty: `run_suite` refuses a run with nothing in
+    /// it, because aggregating an empty set yields Pass and a green
+    /// build that asked the reasoner nothing. That guarantee covers
+    /// deferral too: a selection in which EVERY case is deferred is a
+    /// configuration error, not a green run over zero cases.
+    Ran {
+        results: Vec<CaseResult>,
+        /// Cases that were selected but deliberately not run. Carried
+        /// beside the results, never inside them, so that a report can
+        /// name and count every one of them while `aggregate_cases`
+        /// cannot see them at all.
+        deferred: Vec<DeferredCase>,
+    },
+    /// A configuration error: exit 2, and NOT a statement about the
+    /// ontology. Carries the message to print.
+    Config(String),
+}
+
+/// Aggregate a whole run's case verdicts, worst-first.
+///
+/// Routed through the very same `verdict::aggregate` the per-case path
+/// uses, by lifting each case verdict into a `CheckOutcome`, so the
+/// precedence Fail > Indeterminate > UnrefutedPass > Pass is defined
+/// in exactly one place and a run can never disagree with a case about
+/// what "worst" means.
+///
+/// `aggregate` returns Pass for an empty slice. That is safe here only
+/// because `run_suite` never calls this with an empty slice: it
+/// returns `Config` for a suite or filter that selected no cases, and
+/// for a selection every one of whose cases was deferred. Do not
+/// remove those guards on the assumption this function is defensive;
+/// it is not.
+///
+/// Deferred cases are not `CaseResult`s at all (see [`DeferredCase`]),
+/// so no deferred case can reach this function and set an exit code.
+/// That is a structural property, not a filter applied here, which is
+/// why there is no `if deferred` below to forget.
+#[must_use]
+pub fn aggregate_cases(results: &[CaseResult]) -> Verdict {
+    let lifted: Vec<CheckOutcome> = results
+        .iter()
+        .map(|r| CheckOutcome {
+            name: r.id.clone(),
+            verdict: r.verdict.clone(),
+            rests_on_absence: false,
+        })
+        .collect();
+    aggregate(&lifted)
+}
+
+/// Discover, filter, load, and run a whole suite.
+///
+/// # Configuration errors abort, they are never reported as cases
+///
+/// A manifest that fails to load, a filter that selects nothing, an
+/// `--ontology` that is not a readable file: each stops the run with
+/// `Config` (exit 2). None of them is evidence about the ontology, and
+/// reporting any of them as a failing CASE would put a red mark next
+/// to SULO for a mistake in the harness's own inputs. Loading is done
+/// for EVERY selected case before the first reasoner call, so a typo
+/// in the last manifest is reported in under a second rather than
+/// after the whole suite has run.
+pub fn run_suite(opts: &RunOptions) -> RunOutcome {
+    let discovered = match discover(opts.suite) {
+        Ok(d) => d,
+        Err(e) => return RunOutcome::Config(e.to_string()),
+    };
+    let discovered_count = discovered.len();
+
+    let selected: Vec<PathBuf> = match opts.filter {
+        Some(f) => discovered
+            .into_iter()
+            .filter(|p| p.to_string_lossy().contains(f))
+            .collect(),
+        None => discovered,
+    };
+
+    // Same reasoning as `SuiteError::NoCases`, one level in: a filter
+    // that matches nothing would otherwise aggregate an empty set into
+    // a Pass and report a green build for a run that checked nothing.
+    if selected.is_empty() {
+        let filter = opts.filter.unwrap_or_default();
+        return RunOutcome::Config(format!(
+            "--filter {filter:?} matched none of the {discovered_count} case(s) under \
+             {}, so this run would check nothing and still report a pass. The filter \
+             is a substring match against the manifest path.",
+            opts.suite.display()
+        ));
+    }
+
+    if let Some(p) = opts.ontology
+        && !p.is_file()
+    {
+        return RunOutcome::Config(format!(
+            "--ontology {} is not a readable file: pass the path to the ontology \
+             the suite should be checked against",
+            p.display()
+        ));
+    }
+
+    let mut cases = Vec::with_capacity(selected.len());
+    for path in &selected {
+        match load_case(path) {
+            Ok(c) => cases.push(c),
+            Err(e) => return RunOutcome::Config(e.to_string()),
+        }
+    }
+
+    // Two cases sharing an `id` appear twice under one name in the
+    // JSON `cases` array and the JUnit report, with no way for a
+    // consumer to tell which verdict belongs to which manifest.
+    // Discovery is by path, so nothing upstream catches it. Refused
+    // rather than tolerated, for the same reason the other three
+    // "this run would mislead" conditions are.
+    {
+        let mut seen: BTreeMap<&str, &PathBuf> = BTreeMap::new();
+        for (case, path) in cases.iter().zip(&selected) {
+            if let Some(first) = seen.insert(case.id.as_str(), path) {
+                return RunOutcome::Config(format!(
+                    "two cases share the id {:?} ({} and {}), so a report could not say \
+                     which verdict belongs to which manifest. Case ids must be unique \
+                     within a suite.",
+                    case.id,
+                    first.display(),
+                    path.display()
+                ));
+            }
+        }
+    }
+
+    // Split off the cases whose oracle of record is not this
+    // reasoner. Done AFTER loading, because the tag lives in the
+    // manifest: a deferred case still has to parse, so a typo in one
+    // is still exit 2 rather than a file nobody reads.
+    let mut to_run: Vec<(&Case, &PathBuf)> = Vec::with_capacity(cases.len());
+    let mut deferred: Vec<DeferredCase> = Vec::new();
+    for (case, path) in cases.iter().zip(&selected) {
+        let tagged = case.tags.iter().any(|t| t == DEFERRED_TAG);
+        let execute = match opts.deferred {
+            DeferredCases::Skip => !tagged,
+            DeferredCases::Include => true,
+            DeferredCases::Only => tagged,
+        };
+        if execute {
+            to_run.push((case, path));
+        } else if tagged {
+            // Named and counted, never silently dropped. In `Only`
+            // mode the untagged cases are NOT recorded here: the
+            // operator asked for exactly the tagged ones, the same way
+            // `--filter` narrows without listing what it excluded.
+            deferred.push(DeferredCase {
+                id: case.id.clone(),
+                path: path.clone(),
+                reason: DEFERRED_REASON.to_string(),
+            });
+        }
+    }
+
+    // The same reasoning as `SuiteError::NoCases` and the empty-filter
+    // guard above, one level further in: a selection in which nothing
+    // is left to run would aggregate an empty set into a Pass and
+    // report a green build for a run that asked the reasoner nothing.
+    // Deferral must not become a way to reach that state.
+    if to_run.is_empty() {
+        let err = match opts.deferred {
+            DeferredCases::Only => SuiteError::NoDeferredCases {
+                path: opts.suite.to_path_buf(),
+                selected: selected.len(),
+                tag: DEFERRED_TAG,
+            },
+            // `Include` runs everything, so it cannot get here with a
+            // non-empty selection, and an empty selection was already
+            // refused above.
+            DeferredCases::Skip | DeferredCases::Include => SuiteError::AllCasesDeferred {
+                path: opts.suite.to_path_buf(),
+                selected: selected.len(),
+                tag: DEFERRED_TAG,
+            },
+        };
+        return RunOutcome::Config(err.to_string());
+    }
+
+    let mut results = Vec::with_capacity(to_run.len());
+    for (case, path) in to_run {
+        let default_ontology = match (&case.ontology, opts.ontology) {
+            // The case names its own ontology, so `run_case` never
+            // reads this argument. Nothing is being defaulted to the
+            // empty path: the branch below is where a default is
+            // actually required, and it refuses to invent one.
+            (Some(_), _) => Path::new(""),
+            (None, Some(p)) => p,
+            (None, None) => {
+                return RunOutcome::Config(format!(
+                    "case {} ({}) does not set `ontology:` and --ontology was not \
+                     given, so there is no ontology to check it against",
+                    case.id,
+                    path.display()
+                ));
+            }
+        };
+        results.push(run_case(case, default_ontology));
+    }
+
+    RunOutcome::Ran { results, deferred }
 }

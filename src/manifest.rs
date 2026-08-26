@@ -200,13 +200,21 @@ pub struct Case {
     pub tags: Vec<String>,
     /// The per-case reasoner time budget, in milliseconds, used as
     /// the `deadline` for every check `run_case` makes on this case's
-    /// behalf. Defaults to 30000 (`default_timeout`). A value of 0
-    /// means "expire immediately", not "no limit": it forces a
-    /// deterministic `Indeterminate(Timeout)` on every check it
-    /// governs, matching the zero-deadline seam already used
-    /// elsewhere in this crate (`oracle::holds_with_deadline`) to
-    /// force a Timeout without depending on a real reasoner call
-    /// being slow.
+    /// behalf. Defaults to 30000 (`default_timeout`).
+    ///
+    /// A value of 0 means "expire immediately", not "no limit". It
+    /// does NOT, however, force `Indeterminate(Timeout)` on every
+    /// check it governs, and an earlier version of this comment said
+    /// it did. Measured: a subsumption check over
+    /// `tests/fixtures/clean.ttl` with `timeout_ms: 0` still returns
+    /// `Pass`, because the reasoner settles it before reaching the
+    /// tableau where the deadline is consulted. What is true is
+    /// narrower, and is what `oracle::holds_with_deadline` claims: a
+    /// zero deadline forces a Timeout on any arm that genuinely needs
+    /// tableau work, and on `materialize`, whose very first act is to
+    /// check the deadline (see `tests/materialize.rs`). Reach for an
+    /// unbound prefix or a `cq:` block, not a zero budget, when a
+    /// deterministic `Indeterminate` is what a fixture needs.
     pub timeout_ms: u64,
     /// Directory the manifest lives in; all paths resolve against it.
     pub base_dir: PathBuf,

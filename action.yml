@@ -1,0 +1,174 @@
+# Composite action: run the SULO regression suite against an ontology using a
+# prebuilt, pinned binary. No Rust toolchain on the consumer's runner.
+#
+# Spec section 11 (consumer snippet), with the org corrected from the stale
+# AIDAVA-DEV to MaastrichtU-IDS:
+#
+#   - uses: MaastrichtU-IDS/sulo-testharness@v0.1.0
+#     with: { ontology: sulo.ttl }
+#
+# The asset names below are a cross-file contract with
+# `.github/workflows/release.yml`; `tests/action.rs` asserts they agree.
+name: SULO test harness
+description: >-
+  Run the SULO regression and competency-question suite against an ontology
+  using a pinned, prebuilt binary. Requires no Rust toolchain on the runner.
+author: MaastrichtU-IDS
+
+branding:
+  icon: check-square
+  color: purple
+
+inputs:
+  ontology:
+    description: >-
+      Path to the ontology Turtle file to test, relative to the workspace.
+      Leave empty to let each case name its own ontology.
+    required: false
+    default: sulo.ttl
+  suite:
+    description: >-
+      Suite root directory to discover cases under. Leave empty to use the
+      SULO suite bundled with the pinned release, which is the suite that
+      release was tested with.
+    required: false
+    default: ""
+  format:
+    description: "Report format: text, json, or junit."
+    required: false
+    default: text
+  allow-indeterminate:
+    description: >-
+      Set to "true" to exit 0 rather than 3 when the run holds an Indeterminate
+      and no Fail (spec 5.4). This never suppresses a Fail, and the
+      Indeterminates stay in the report either way. Reach for it only when a
+      genuine reasoner timeout is blocking you; an Indeterminate caused by
+      axiom loss means the reasoner saw a weaker ontology than the one that
+      ships, and silencing that is the unearned green this project exists to
+      prevent.
+    required: false
+    default: "false"
+  version:
+    description: >-
+      Release tag of sulo-testharness to download, for example v0.1.0. Pin
+      this; a moving version is a moving oracle.
+    required: false
+    default: v0.1.0
+
+runs:
+  using: composite
+  steps:
+    # Inputs reach bash through env, never through ${{ }} interpolated into
+    # a run script: a `with:` value is consumer-controlled text, and
+    # splicing it into the script body is a command-injection hole.
+    - name: Download the pinned sulo-testharness release
+      id: download
+      shell: bash
+      env:
+        INPUT_SUITE: ${{ inputs.suite }}
+        INPUT_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+
+        # RUNNER_OS is one of Linux, macOS, Windows; RUNNER_ARCH one of
+        # X86, X64, ARM, ARM64. Every pair the release publishes an asset
+        # for gets an arm here, and nothing else does.
+        case "${RUNNER_OS}/${RUNNER_ARCH}" in
+          Linux/X64) asset="sulo-testharness-linux-x86_64" ;;
+          macOS/ARM64) asset="sulo-testharness-macos-aarch64" ;;
+          *)
+            echo "::error::sulo-testharness: no release asset for runner ${RUNNER_OS}/${RUNNER_ARCH}; the release publishes Linux/X64 and macOS/ARM64 only"
+            exit 2
+            ;;
+        esac
+
+        # This is the shape GitHub serves release assets at:
+        # https://github.com/OWNER/REPO/releases/download/TAG/ASSET
+        base="https://github.com/MaastrichtU-IDS/sulo-testharness/releases/download/${INPUT_VERSION}"
+
+        bin="${RUNNER_TEMP}/sulo-testharness"
+        if ! curl --fail --location --show-error --silent --retry 3 \
+             --retry-all-errors --output "${bin}" "${base}/${asset}"; then
+          echo "::error::sulo-testharness: could not download ${asset} for version ${INPUT_VERSION} from ${base}; check that the tag exists and published that asset"
+          exit 2
+        fi
+        chmod +x "${bin}"
+        echo "bin=${bin}" >> "${GITHUB_OUTPUT}"
+
+        suite="${INPUT_SUITE}"
+        if [ -z "${suite}" ]; then
+          # A binary alone has no cases to run. The release bundles the
+          # suite from the same tag, so the cases and the engine that runs
+          # them are always the pair that were tested together.
+          bundle="${RUNNER_TEMP}/sulo-suite"
+          mkdir -p "${bundle}"
+          if ! curl --fail --location --show-error --silent --retry 3 \
+               --retry-all-errors --output "${bundle}/sulo-suite.tar.gz" \
+               "${base}/sulo-suite.tar.gz"; then
+            echo "::error::sulo-testharness: could not download sulo-suite.tar.gz for version ${INPUT_VERSION}; pass the suite input to use your own suite directory instead"
+            exit 2
+          fi
+          tar -xzf "${bundle}/sulo-suite.tar.gz" -C "${bundle}"
+          suite="${bundle}/suites/sulo"
+        fi
+
+        if [ ! -d "${suite}" ]; then
+          echo "::error::sulo-testharness: suite directory not found: ${suite}"
+          exit 2
+        fi
+        echo "suite=${suite}" >> "${GITHUB_OUTPUT}"
+
+    - name: Run the suite
+      shell: bash
+      env:
+        HARNESS_BIN: ${{ steps.download.outputs.bin }}
+        SUITE_DIR: ${{ steps.download.outputs.suite }}
+        INPUT_ONTOLOGY: ${{ inputs.ontology }}
+        INPUT_FORMAT: ${{ inputs.format }}
+        INPUT_ALLOW_INDETERMINATE: ${{ inputs.allow-indeterminate }}
+      run: |
+        # No -e here. The harness's exit code IS the result, and -e would
+        # abort this script before the code could be reported. It is
+        # captured below and re-raised as the step's own status, so this
+        # step fails exactly when the harness fails. An action that always
+        # succeeds is a check that cannot fail, which is the one outcome
+        # this whole project exists to prevent.
+        set -uo pipefail
+
+        args=(run --suite "${SUITE_DIR}" --format "${INPUT_FORMAT}")
+        if [ -n "${INPUT_ONTOLOGY}" ]; then
+          args+=(--ontology "${INPUT_ONTOLOGY}")
+        fi
+        # Compared against the exact string "true" rather than tested for
+        # non-emptiness: `allow-indeterminate: false` is a non-empty string,
+        # and a truthiness test would turn an explicit "no" into a yes.
+        if [ "${INPUT_ALLOW_INDETERMINATE}" = "true" ]; then
+          args+=(--allow-indeterminate)
+        fi
+
+        status=0
+        "${HARNESS_BIN}" "${args[@]}" || status=$?
+
+        # Spec section 5.4.
+        case "${status}" in
+          0) echo "::notice::sulo-testharness: all checks passed" ;;
+          1) echo "::error::sulo-testharness: at least one check failed" ;;
+          2) echo "::error::sulo-testharness: harness or configuration error" ;;
+          3)
+            # Indeterminate fails the step, deliberately. An Indeterminate
+            # is a result the harness refuses to vouch for, and its
+            # dominant cause in this design is axiom loss (spec section
+            # 12), which is deterministic and means the reasoner saw a
+            # weaker ontology than the one that ships. Mapping it to
+            # success would turn the loss downgrade, the mechanism that
+            # exists to stop an unearned green, into an unearned green.
+            # A timeout reaching here is the recognised cost; raise the
+            # case's timeout_ms rather than silencing the code.
+            echo "::error::sulo-testharness: at least one check was Indeterminate (a timeout, or an axiom loss bearing on the query); this is not a pass"
+            ;;
+          4) echo "::error::sulo-testharness: golden closure drift, or a re-baseline is required" ;;
+          5) echo "::error::sulo-testharness: oracle divergence between rustdl and HermiT" ;;
+          *) echo "::error::sulo-testharness: unexpected exit code ${status}" ;;
+        esac
+
+        exit "${status}"
