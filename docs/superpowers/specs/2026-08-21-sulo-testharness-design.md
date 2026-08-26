@@ -754,10 +754,19 @@ itself a useful errata report for the SULO authors:
   `:visit_1 sulo:hasParticipant :alice, :drsmith` where the data defines
   `:encounter`. The suite uses `:encounter`.
 - **Figure 7's roles are typed only as OMRSE classes** (`OMRSE_00000011`,
-  `OMRSE_00000012`), which are not imported, so nothing makes them `sulo:Role`
-  and the chain cannot fire. The suite types them `sulo:Role` explicitly. This is
-  a substantive repair, not a typo, and arguably the paper's example does not work
-  as printed.
+  `OMRSE_00000012`), which are not imported, so nothing makes them `sulo:Role`.
+  The suite types them `sulo:Role` explicitly.
+
+  **Corrected after measuring.** An earlier version of this bullet said the chain
+  "cannot fire" without that typing. That is false. `hasParticipant`'s
+  `owl:propertyChainAxiom ( hasParticipant [ owl:inverseOf hasFeature ] )` carries no
+  class conditions on any position, so `encounter hasParticipant alice, drsmith`
+  follows from Figure 7's data as printed, which is exactly the inference Figure 7
+  claims. The repair is still substantive, but for a different reason: the `sulo:Role`
+  typing is required for **Figure 5's pattern class expression**
+  (`Role and isFeatureOf some Object`), not for **Figure 6's role chain**. Since this
+  list is intended for the SULO authors, the distinction matters: Figure 6 works as
+  published, Figure 5 does not apply to Figure 7's data without the added typing.
 - **Figure 4 puts the unit and quality in blank nodes.** rustdl's
   `property-values` covers named individuals only, so blank-node values are
   invisible to the CQ path. All suite data uses skolemised IRIs.
