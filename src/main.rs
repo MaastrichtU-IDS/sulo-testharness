@@ -191,6 +191,33 @@ fn emit_differential(
     }
 }
 
+/// One JSON document for a `differential` route that produced NO
+/// comparison, so that `--format json` never leaves stdout empty.
+///
+/// Three routes short-circuit before any report is rendered: a
+/// configuration error, a `--accept-divergences` re-baseline, and an
+/// unreadable pin. Two of them used to write nothing at all to stdout
+/// and the third wrote a line of plain text, which is not JSON. In CI
+/// the differential step runs `--format json > differential.json` and
+/// `| tee differential.txt`, both of which read STDOUT, so on exactly
+/// the runs that failed both uploaded artifacts came back blank while
+/// the only explanation went to stderr.
+///
+/// The payload deliberately carries NO `summary` and NO `questions`
+/// key. A consumer reading `.summary.questions` off one of these would
+/// see `0` and could read it as "every question agreed", which is
+/// ruling 8's overstatement in JSON form; reading it off this object
+/// yields `null` instead. `outcome` is the discriminator, and it never
+/// appears on a real report.
+fn non_report_json(outcome: &str, message_key: &str, message: &str, exit_code: i32) -> String {
+    let mut map = serde_json::Map::new();
+    map.insert("outcome".into(), outcome.into());
+    map.insert(message_key.into(), message.into());
+    map.insert("exit_code".into(), exit_code.into());
+    serde_json::to_string_pretty(&serde_json::Value::Object(map))
+        .unwrap_or_else(|e| format!("{{\"outcome\":\"{outcome}\",\"error\":\"{e}\"}}"))
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
@@ -275,6 +302,13 @@ fn main() -> ExitCode {
                 // and the same stderr, as `run`'s.
                 DifferentialOutcome::Config(msg) => {
                     eprintln!("error: {msg}");
+                    // ...and, under `--format json`, the same message
+                    // on stdout as JSON, so the artifact the CI step
+                    // uploads is never a 0-byte file. See
+                    // `non_report_json`.
+                    if format == DiffFormat::Json {
+                        println!("{}", non_report_json("config_error", "error", &msg, 2));
+                    }
                     return ExitCode::from(2);
                 }
             };
@@ -301,7 +335,27 @@ fn main() -> ExitCode {
                 Some(path) => match check_pin(&asked, opts.suite, path, opts.accept_divergences) {
                     PinOutcome::Compared(diff) => Some(diff),
                     PinOutcome::Rebaselined(p) => {
-                        println!("pinned divergences written to {}", p.display());
+                        // Same rule as `RebaselineRequired` below: under
+                        // `--format json` stdout is one JSON document,
+                        // so the human line goes to stderr and stdout
+                        // gets the machine-readable form of it.
+                        match format {
+                            DiffFormat::Text => {
+                                println!("pinned divergences written to {}", p.display());
+                            }
+                            DiffFormat::Json => {
+                                eprintln!("pinned divergences written to {}", p.display());
+                                println!(
+                                    "{}",
+                                    non_report_json(
+                                        "rebaselined",
+                                        "divergences",
+                                        &p.display().to_string(),
+                                        0,
+                                    )
+                                );
+                            }
+                        }
                         return ExitCode::SUCCESS;
                     }
                     PinOutcome::RebaselineRequired(m) => {
@@ -322,6 +376,9 @@ fn main() -> ExitCode {
                     }
                     PinOutcome::Error(m) => {
                         eprintln!("error: {m}");
+                        if format == DiffFormat::Json {
+                            println!("{}", non_report_json("pin_error", "error", &m, 2));
+                        }
                         return ExitCode::from(2);
                     }
                 },

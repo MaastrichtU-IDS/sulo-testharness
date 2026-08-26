@@ -544,7 +544,7 @@ fn the_action_and_the_release_workflow_agree_on_the_suite_bundle() {
 }
 
 #[test]
-fn every_run_script_in_both_files_is_valid_bash() {
+fn every_run_script_in_every_workflow_file_is_valid_bash() {
     // These scripts execute only on a runner, and the release workflow's
     // execute only on a pushed tag. A syntax error in one is not otherwise
     // observable until the moment it is most expensive.

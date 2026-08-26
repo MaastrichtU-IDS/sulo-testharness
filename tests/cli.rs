@@ -686,9 +686,16 @@ fn a_pin_from_another_reasoner_exits_four_from_the_binary() {
 
     let dir = scratch("pin-version");
     let path = dir.join("old.divergences");
+    // The pin carries a ROW, and deliberately. A stale header
+    // suppresses comparison of the pin's CONTENTS, not just its
+    // header, and an empty pin cannot show that: there would be
+    // nothing whose comparison could have been suppressed. This row
+    // names a case that does not exist in `PROPERTIES`, so a run that
+    // DID compare would have to report it STALE by name. The
+    // assertions below observe that neither happened.
     std::fs::write(
         &path,
-        format!("# suite: {PROPERTIES}\n# reasoner: rustdl v0.0.1-ancient\n"),
+        format!("# suite: {PROPERTIES}\n# reasoner: rustdl v0.0.1-ancient\n{REAL_ROW}\n"),
     )
     .expect("the scratch pin should be writable");
 
@@ -703,6 +710,17 @@ fn a_pin_from_another_reasoner_exits_four_from_the_binary() {
     assert!(
         stdout.contains("re-baseline required") && stdout.contains("v0.0.1-ancient"),
         "the message must name what was stale:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("STALE") && !stdout.contains("timeinstant-datarange"),
+        "the pin's own row must be neither confirmed nor called stale: a pin this build \
+         will not trust is not compared at all, so nothing in it may be reported \
+         on:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("as pinned"),
+        "no pin diff may be rendered on this route; the report is printed \
+         UNPINNED:\n{stdout}"
     );
     assert!(
         stdout.contains("differential: rustdl vs HermiT") && stdout.contains("question(s):"),
@@ -761,6 +779,145 @@ fn a_stale_pin_in_json_format_still_emits_parseable_json() {
     assert!(
         stderr.contains("re-baseline required") && stderr.contains("v0.0.1-ancient"),
         "the pin message must still be reported, on stderr:\n{stderr}"
+    );
+}
+
+/// Under `--format json`, EVERY route writes one JSON document to
+/// stdout, including the routes that render no report at all.
+///
+/// This row is the configuration-error one, which needs no jar: the
+/// refusal comes before any case is loaded. It used to leave stdout at
+/// 0 bytes while the only explanation went to stderr, and the CI step
+/// captures stdout twice (`> differential.json` and `| tee
+/// differential.txt`), so both uploaded artifacts came back blank on
+/// exactly the run that failed.
+///
+/// `outcome` is the discriminator, and the payload carries NO
+/// `summary` key: a consumer reading `.summary.questions` off a
+/// non-report must get `null`, not a `0` it could read as "every
+/// question agreed".
+#[test]
+fn a_config_error_in_json_format_still_emits_parseable_json() {
+    require_sulo();
+    let out = run(&[
+        "differential",
+        "--suite",
+        SUITE,
+        "--ontology",
+        SULO,
+        "--robot",
+        "tests/fixtures/clean.ttl",
+        "--divergences",
+        "suites/sulo.divergences",
+        "--filter",
+        "restrictions",
+        "--format",
+        "json",
+    ]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "stderr:\n{stderr}");
+    assert!(
+        !stdout.trim().is_empty(),
+        "stdout must not be empty: the CI step uploads it as the run's only \
+         machine-readable artifact"
+    );
+    let payload: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout must be one JSON document: {e}\n{stdout}"));
+    assert_eq!(payload["outcome"], "config_error", "{stdout}");
+    assert_eq!(payload["exit_code"], 2, "{stdout}");
+    assert!(
+        payload["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("--divergences") && e.contains("--filter")),
+        "the payload must carry the same refusal stderr got:\n{stdout}"
+    );
+    assert!(
+        payload.get("summary").is_none() && payload.get("questions").is_none(),
+        "a non-report must not be shaped like a report: nothing was asked, and a \
+         `summary` of zero questions reads as agreement:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("--divergences"),
+        "the human message stays on stderr too:\n{stderr}"
+    );
+}
+
+/// The same rule on the two pin routes, which need a real run behind
+/// them and so need the jar.
+///
+/// `PinOutcome::Error` (here, a pin file that does not exist) used to
+/// leave stdout at 0 bytes, and `PinOutcome::Rebaselined` used to
+/// print a line of plain text into what is supposed to be a JSON
+/// document.
+#[test]
+fn the_pin_routes_in_json_format_still_emit_parseable_json() {
+    require_sulo();
+    let Some(jar) = robot_jar() else { return };
+
+    let dir = scratch("pin-json-routes");
+    let missing = dir.join("does-not-exist.divergences");
+    let workdir = scratch("pin-json-routes-probes");
+    let json_run = |pin: &Path, accept: bool| {
+        let mut args = vec![
+            "differential",
+            "--suite",
+            PROPERTIES,
+            "--ontology",
+            SULO,
+            "--robot",
+            jar.to_str().expect("the jar path is UTF-8"),
+            "--workdir",
+            workdir.to_str().expect("the scratch path is UTF-8"),
+            "--divergences",
+            pin.to_str().expect("the pin path is UTF-8"),
+            "--format",
+            "json",
+        ];
+        if accept {
+            args.push("--accept-divergences");
+        }
+        run(&args)
+    };
+
+    let out = json_run(&missing, false);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a missing pin is a configuration error, never an empty one. stdout:\n{stdout}"
+    );
+    let payload: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout must be one JSON document: {e}\n{stdout}"));
+    assert_eq!(payload["outcome"], "pin_error", "{stdout}");
+    assert_eq!(payload["exit_code"], 2, "{stdout}");
+    assert!(
+        payload.get("summary").is_none(),
+        "a non-report must not be shaped like a report:\n{stdout}"
+    );
+
+    // ...and the re-baseline, which writes the file it names.
+    let fresh = dir.join("fresh.divergences");
+    let out = json_run(&fresh, true);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "stdout:\n{stdout}");
+    let payload: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout must be one JSON document: {e}\n{stdout}"));
+    assert_eq!(payload["outcome"], "rebaselined", "{stdout}");
+    assert_eq!(
+        payload["divergences"],
+        serde_json::Value::from(fresh.display().to_string()),
+        "the payload must name the file that was written:\n{stdout}"
+    );
+    assert!(
+        fresh.is_file(),
+        "the re-baseline must actually have written {}",
+        fresh.display()
+    );
+    assert!(
+        stderr.contains("pinned divergences written to"),
+        "the human line moves to stderr under --format json, it is not dropped:\n{stderr}"
     );
 }
 

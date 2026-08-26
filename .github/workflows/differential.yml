@@ -170,9 +170,23 @@ jobs:
       # This step has been "fixed" once before by reordering the lines
       # while leaving the `-e` in place, so: the ordering was never the
       # bug, the inherited errexit was. `tests/action.rs`
-      # (`the_differential_step_does_not_inherit_errexit`) executes
-      # this script's `set` line under `bash -e` and asserts errexit is
-      # off afterwards.
+      # (`the_differential_step_does_not_inherit_errexit`) reads this
+      # step's WHOLE `run:` script out of this file and executes it
+      # under `bash -e` with `cargo` replaced by a stub that exits 5,
+      # then asserts on the three things an inherited `-e` would take
+      # away: the `differential exited 5` line on stdout, a non-empty
+      # `differential.json` on disk, and 5 as the script's own exit
+      # code.
+      #
+      # Both captures below read STDOUT and nothing else. Under
+      # `--format json` every route the binary can take now writes one
+      # JSON document there, including the three that render no report
+      # at all (a configuration error, a `--accept-divergences`
+      # re-baseline, an unreadable pin), so the uploaded
+      # `differential.json` is never a 0-byte file. `differential.txt`
+      # comes from the TEXT run, and on a configuration error it IS
+      # still empty: that route writes only to stderr, which lands in
+      # this step's log rather than in the artifact.
       - name: Differential
         run: |
           set +e -uo pipefail
