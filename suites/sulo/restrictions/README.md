@@ -17,7 +17,8 @@ opposed to the 15 named-class subClassOf axioms covered under
 - `duration-nonnegative`, an `expect_inconsistent: true` counter-
   example for the `Duration` non-negative `xsd:decimal` facet.
 - `timeinstant-datarange`, tagged `oracle-hermit` and excluded from
-  `tests/restrictions.rs`'s enforced `EXPECTED` table; see below.
+  `tests/restrictions.rs`'s enforced `EXPECTED` table. Decided by the
+  HermiT differential, not by the pinned reasoner; see below.
 
 ## The four axioms with no case
 
@@ -94,9 +95,38 @@ writing it and marking it honestly is the point: an absent case reads
 as "nothing to test here", while a present, correctly-failing case
 reads as "the reasoner cannot see this yet". `tests/restrictions.rs`
 excludes it by name from the `EXPECTED` table it enforces, so it does
-not fail CI over a known, already-documented reasoner gap. It is
-meant to be picked back up once a HermiT differential lands
-(referenced elsewhere in this project's plan as the mechanism for
-catching exactly this class of soundness/completeness gap); at that
-point this case should move into the enforced table as a genuine
-`Pass`.
+not fail CI over a known, already-documented reasoner gap.
+
+### The differential decides it, and it is where the case now lives
+
+The HermiT differential has landed, so this case is no longer checked
+by nothing. `sulo-testharness differential --suite suites/sulo
+--ontology ../sulo/sulo.ttl --robot robot.jar --filter
+restrictions/timeinstant-datarange` asks HermiT the same consistency
+question the case's gate asks rustdl, and HermiT answers INCONSISTENT,
+which is exactly what `expect_inconsistent: true` claims. rustdl
+answers CONSISTENT. The two reasoners therefore DISAGREE, and the
+differential reports that as a `Divergence`.
+
+That divergence is the honest outcome, not a bug in the job: the two
+reasoners really do disagree about real SULO here, and naming which
+one is the outlier (rustdl, incomplete on this query) is the most
+valuable thing either of them can say. `.github/workflows/differential.yml`
+runs it, and its header explains why quieting it with
+`continue-on-error` would turn the one job built to detect
+disagreement into a job that can never report one.
+
+Because the disagreement is expected, it is PINNED in
+`suites/sulo.divergences`, which records both reasoners' answers. A run
+whose divergences match the pin exits 0, so the weekly job is green
+today and red means something changed. The pin is diffed in both
+directions: this entry NO LONGER OCCURRING is exit 4, not a quiet pass,
+because that is precisely the day rustdl gained the capability and this
+case should move into `tests/restrictions.rs`'s `EXPECTED` table. See
+`src/divergences.rs`.
+
+The case moves into `tests/restrictions.rs`'s enforced `EXPECTED`
+table as a genuine `Pass` only when the PINNED REASONER can enforce
+the axiom, which is a different event from the differential landing.
+Until then the tag reads "not decided by this run", not "not decided
+by anything".

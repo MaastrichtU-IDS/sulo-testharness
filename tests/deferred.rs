@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use sulo_testharness::manifest::load_case;
-use sulo_testharness::suite::{DEFERRED_TAG, discover};
+use sulo_testharness::suite::{DEFERRED_REASON, DEFERRED_TAG, discover};
 
 const SUITE: &str = "suites/sulo";
 
@@ -28,7 +28,13 @@ const SUITE: &str = "suites/sulo";
 /// only (xsd:dateTime or xsd:dateTimeStamp)`, a data-range
 /// `allValuesFrom` the pinned reasoner provably cannot enforce; the
 /// ontology logs baseline loss for that exact axiom on every load.
-/// Spec line 746 puts such a case in the CI differential (5.3).
+/// Spec line 746 puts such a case in the CI differential (5.3), which
+/// now exists: the `differential` subcommand asks HermiT, HermiT finds
+/// the clash rustdl cannot, and the disagreement is reported as a
+/// Divergence. That divergence is expected, so it is pinned in
+/// `suites/sulo.divergences` (see `tests/divergences.rs`), which is
+/// where the day it STOPS occurring will be caught. The tag means "not
+/// decided by THIS run", not "not decided by anything".
 const DEFERRED: &[&str] = &["timeinstant-datarange"];
 
 fn tagged_on_disk() -> BTreeSet<String> {
@@ -81,5 +87,34 @@ fn the_pinned_set_is_not_empty() {
     assert!(
         !DEFERRED.is_empty(),
         "an empty DEFERRED would make both direction tests pass against an empty scan"
+    );
+}
+
+/// The reason a reader is shown must name the thing that DOES decide
+/// the case.
+///
+/// Until the HermiT differential landed, `DEFERRED_REASON` said this
+/// case was "currently checked by nothing", which was true and was the
+/// honest thing to print. It is no longer true: the `differential`
+/// subcommand decides it. A stale version of that sentence would
+/// understate the harness, which is a smaller sin than overstating it
+/// but is still a report that does not match reality, and it would
+/// leave a reader believing there is nothing they can run.
+///
+/// So the text is pinned in both directions: it must name the
+/// subcommand, and it must NOT still claim nothing checks the case.
+#[test]
+fn the_deferral_reason_names_the_thing_that_does_decide_the_case() {
+    assert!(
+        DEFERRED_REASON.contains("differential"),
+        "the reason must name the differential, which is where this case is decided: \
+         {DEFERRED_REASON}"
+    );
+    assert!(
+        !DEFERRED_REASON.contains("checked by nothing")
+            && !DEFERRED_REASON.contains("NOT yet built"),
+        "the reason still says the differential does not exist. It does; see \
+         .github/workflows/differential.yml and the `differential` subcommand: \
+         {DEFERRED_REASON}"
     );
 }

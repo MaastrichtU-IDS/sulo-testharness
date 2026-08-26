@@ -38,13 +38,17 @@ use crate::prefixes::{self, base_mapping, with_overrides};
 use crate::verdict::{CheckOutcome, IndeterminateReason, Verdict, aggregate};
 
 /// Name of the consistency-gate check when the case expects
-/// inconsistency. Shared between `run_case` (which produces it) and
-/// `downgrade_for_loss` (which must recognise it) so the two can
-/// never drift apart.
-const GATE_EXPECT_INCONSISTENT: &str = "gate: expected inconsistent";
+/// inconsistency. Shared between `run_case` (which produces it),
+/// `downgrade_for_loss` (which must recognise it) and
+/// `differential::questions` (which pairs its own gate question with
+/// the outcome recorded under this name) so the three can never drift
+/// apart. Public for that third reader: a differential that looked up
+/// a name nobody produces would find no rustdl answer for every case
+/// and report Indeterminate for the whole suite.
+pub const GATE_EXPECT_INCONSISTENT: &str = "gate: expected inconsistent";
 /// Name of the consistency-gate check when the case expects
 /// consistency. See `GATE_EXPECT_INCONSISTENT`.
-const GATE_EXPECT_CONSISTENT: &str = "gate: expected consistent";
+pub const GATE_EXPECT_CONSISTENT: &str = "gate: expected consistent";
 
 /// The outcome of one case.
 pub struct CaseResult {
@@ -618,7 +622,7 @@ pub const DEFERRED_TAG: &str = "oracle-hermit";
 
 /// Why a deferred case did not run. One constant, so the text a
 /// consumer reads is the same in every report format.
-pub const DEFERRED_REASON: &str = "tagged `oracle-hermit`: the pinned reasoner provably cannot decide this case, so its oracle of record is the CI differential (spec 5.3), which is NOT yet built (phase 7), so this case is currently checked by nothing. Not counted toward the exit code. Pass --deferred include or --deferred only to execute it anyway.";
+pub const DEFERRED_REASON: &str = "tagged `oracle-hermit`: the pinned reasoner provably cannot decide this case, so its oracle of record is the CI differential (spec 5.3), which decides it: run `sulo-testharness differential --suite <dir> --ontology <ttl> --robot <robot.jar>`, or read the report the HermiT differential CI job uploads. Not counted toward THIS run's exit code, because this run did not ask. Pass --deferred include or --deferred only to execute it under the pinned reasoner anyway.";
 
 /// What a run does with the cases carrying [`DEFERRED_TAG`].
 ///
@@ -636,9 +640,12 @@ pub enum DeferredCases {
     /// code like any other case. For someone deliberately checking
     /// whether the reasoner has caught up.
     Include,
-    /// Run ONLY them. This is the seam the phase 7 HermiT differential
-    /// (spec 5.3) will drive: that job needs to execute exactly the
-    /// cases whose oracle of record it is.
+    /// Run ONLY them, under the pinned reasoner. For someone asking
+    /// "what does rustdl make of the cases it is not the oracle for?".
+    /// The HermiT differential does NOT use this seam: it includes
+    /// every case unconditionally, because a differential that skipped
+    /// the cases whose oracle of record it is would leave them checked
+    /// by nothing. See `differential::run_differential`.
     Only,
 }
 
@@ -734,6 +741,91 @@ pub fn aggregate_cases(results: &[CaseResult]) -> Verdict {
     aggregate(&lifted)
 }
 
+/// Discover, filter and load every case a run will act on.
+///
+/// Shared by [`run_suite`] and by `differential::run_differential`, so
+/// that the four ways a run could mislead about what it checked are
+/// refused identically no matter which subcommand is driving. Each
+/// `Err` is a configuration error (exit 2 per spec 5.4), never a
+/// verdict about the ontology: a suite that could not be read has told
+/// us nothing about SULO, and reporting any of these as a failing CASE
+/// would put a red mark next to SULO for a mistake in the harness's
+/// own inputs.
+///
+/// Loading is done for EVERY selected case before the caller makes its
+/// first reasoner call, so a typo in the last manifest is reported in
+/// under a second rather than after the whole suite has run.
+///
+/// The returned vector is guaranteed non-empty.
+pub fn select(
+    suite: &Path,
+    ontology: Option<&Path>,
+    filter: Option<&str>,
+) -> Result<Vec<(Case, PathBuf)>, String> {
+    let discovered = discover(suite).map_err(|e| e.to_string())?;
+    let discovered_count = discovered.len();
+
+    let selected: Vec<PathBuf> = match filter {
+        Some(f) => discovered
+            .into_iter()
+            .filter(|p| p.to_string_lossy().contains(f))
+            .collect(),
+        None => discovered,
+    };
+
+    // Same reasoning as `SuiteError::NoCases`, one level in: a filter
+    // that matches nothing would otherwise aggregate an empty set into
+    // a Pass and report a green build for a run that checked nothing.
+    if selected.is_empty() {
+        let filter = filter.unwrap_or_default();
+        return Err(format!(
+            "--filter {filter:?} matched none of the {discovered_count} case(s) under \
+             {}, so this run would check nothing and still report a pass. The filter \
+             is a substring match against the manifest path.",
+            suite.display()
+        ));
+    }
+
+    if let Some(p) = ontology
+        && !p.is_file()
+    {
+        return Err(format!(
+            "--ontology {} is not a readable file: pass the path to the ontology \
+             the suite should be checked against",
+            p.display()
+        ));
+    }
+
+    let mut cases = Vec::with_capacity(selected.len());
+    for path in &selected {
+        cases.push(load_case(path).map_err(|e| e.to_string())?);
+    }
+
+    // Two cases sharing an `id` appear twice under one name in the
+    // JSON `cases` array and the JUnit report, with no way for a
+    // consumer to tell which verdict belongs to which manifest.
+    // Discovery is by path, so nothing upstream catches it. Refused
+    // rather than tolerated, for the same reason the other three
+    // "this run would mislead" conditions are.
+    {
+        let mut seen: BTreeMap<&str, &PathBuf> = BTreeMap::new();
+        for (case, path) in cases.iter().zip(&selected) {
+            if let Some(first) = seen.insert(case.id.as_str(), path) {
+                return Err(format!(
+                    "two cases share the id {:?} ({} and {}), so a report could not say \
+                     which verdict belongs to which manifest. Case ids must be unique \
+                     within a suite.",
+                    case.id,
+                    first.display(),
+                    path.display()
+                ));
+            }
+        }
+    }
+
+    Ok(cases.into_iter().zip(selected).collect())
+}
+
 /// Discover, filter, load, and run a whole suite.
 ///
 /// # Configuration errors abort, they are never reported as cases
@@ -747,80 +839,18 @@ pub fn aggregate_cases(results: &[CaseResult]) -> Verdict {
 /// in the last manifest is reported in under a second rather than
 /// after the whole suite has run.
 pub fn run_suite(opts: &RunOptions) -> RunOutcome {
-    let discovered = match discover(opts.suite) {
-        Ok(d) => d,
-        Err(e) => return RunOutcome::Config(e.to_string()),
+    let selected = match select(opts.suite, opts.ontology, opts.filter) {
+        Ok(s) => s,
+        Err(msg) => return RunOutcome::Config(msg),
     };
-    let discovered_count = discovered.len();
-
-    let selected: Vec<PathBuf> = match opts.filter {
-        Some(f) => discovered
-            .into_iter()
-            .filter(|p| p.to_string_lossy().contains(f))
-            .collect(),
-        None => discovered,
-    };
-
-    // Same reasoning as `SuiteError::NoCases`, one level in: a filter
-    // that matches nothing would otherwise aggregate an empty set into
-    // a Pass and report a green build for a run that checked nothing.
-    if selected.is_empty() {
-        let filter = opts.filter.unwrap_or_default();
-        return RunOutcome::Config(format!(
-            "--filter {filter:?} matched none of the {discovered_count} case(s) under \
-             {}, so this run would check nothing and still report a pass. The filter \
-             is a substring match against the manifest path.",
-            opts.suite.display()
-        ));
-    }
-
-    if let Some(p) = opts.ontology
-        && !p.is_file()
-    {
-        return RunOutcome::Config(format!(
-            "--ontology {} is not a readable file: pass the path to the ontology \
-             the suite should be checked against",
-            p.display()
-        ));
-    }
-
-    let mut cases = Vec::with_capacity(selected.len());
-    for path in &selected {
-        match load_case(path) {
-            Ok(c) => cases.push(c),
-            Err(e) => return RunOutcome::Config(e.to_string()),
-        }
-    }
-
-    // Two cases sharing an `id` appear twice under one name in the
-    // JSON `cases` array and the JUnit report, with no way for a
-    // consumer to tell which verdict belongs to which manifest.
-    // Discovery is by path, so nothing upstream catches it. Refused
-    // rather than tolerated, for the same reason the other three
-    // "this run would mislead" conditions are.
-    {
-        let mut seen: BTreeMap<&str, &PathBuf> = BTreeMap::new();
-        for (case, path) in cases.iter().zip(&selected) {
-            if let Some(first) = seen.insert(case.id.as_str(), path) {
-                return RunOutcome::Config(format!(
-                    "two cases share the id {:?} ({} and {}), so a report could not say \
-                     which verdict belongs to which manifest. Case ids must be unique \
-                     within a suite.",
-                    case.id,
-                    first.display(),
-                    path.display()
-                ));
-            }
-        }
-    }
 
     // Split off the cases whose oracle of record is not this
     // reasoner. Done AFTER loading, because the tag lives in the
     // manifest: a deferred case still has to parse, so a typo in one
     // is still exit 2 rather than a file nobody reads.
-    let mut to_run: Vec<(&Case, &PathBuf)> = Vec::with_capacity(cases.len());
+    let mut to_run: Vec<(&Case, &PathBuf)> = Vec::with_capacity(selected.len());
     let mut deferred: Vec<DeferredCase> = Vec::new();
-    for (case, path) in cases.iter().zip(&selected) {
+    for (case, path) in &selected {
         let tagged = case.tags.iter().any(|t| t == DEFERRED_TAG);
         let execute = match opts.deferred {
             DeferredCases::Skip => !tagged,

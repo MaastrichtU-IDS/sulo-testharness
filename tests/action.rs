@@ -52,6 +52,21 @@ fn release() -> Value {
     parse(".github/workflows/release.yml")
 }
 
+fn differential_workflow() -> Value {
+    parse(".github/workflows/differential.yml")
+}
+
+/// The named step of the `differential` job.
+fn differential_step(name: &str) -> Value {
+    let wf = differential_workflow();
+    let job = need(need(&wf, "jobs"), "differential").clone();
+    steps(&job)
+        .iter()
+        .find(|s| key(s, "name").and_then(Value::as_str) == Some(name))
+        .unwrap_or_else(|| panic!("differential.yml has no step named `{name}`"))
+        .clone()
+}
+
 /// Mapping lookup by string key, without relying on any `Index` impl.
 fn key<'a>(v: &'a Value, k: &str) -> Option<&'a Value> {
     v.as_mapping()?
@@ -529,7 +544,7 @@ fn the_action_and_the_release_workflow_agree_on_the_suite_bundle() {
 }
 
 #[test]
-fn every_run_script_in_both_files_is_valid_bash() {
+fn every_run_script_in_every_workflow_file_is_valid_bash() {
     // These scripts execute only on a runner, and the release workflow's
     // execute only on a pushed tag. A syntax error in one is not otherwise
     // observable until the moment it is most expensive.
@@ -539,6 +554,15 @@ fn every_run_script_in_both_files_is_valid_bash() {
         (
             ".github/workflows/release.yml",
             need(&release(), "jobs")
+                .as_mapping()
+                .unwrap()
+                .iter()
+                .map(|(_, job)| job.clone())
+                .collect(),
+        ),
+        (
+            ".github/workflows/differential.yml",
+            need(&differential_workflow(), "jobs")
                 .as_mapping()
                 .unwrap()
                 .iter()
@@ -601,5 +625,93 @@ fn allow_indeterminate_is_gated_on_the_exact_string_true() {
         !script.contains("-n \"${INPUT_ALLOW_INDETERMINATE}\"")
             && !script.contains("-z \"${INPUT_ALLOW_INDETERMINATE}\""),
         "a -n/-z test on this input would fire on the default \"false\""
+    );
+}
+
+// ---------------------------------------------------------------
+// The differential job's one script, run for real.
+// ---------------------------------------------------------------
+
+/// GitHub runs a `run:` step that names no `shell:` as `bash -e {0}`,
+/// so the Differential step's script starts with errexit ALREADY ON.
+/// `set -uo pipefail` does not clear it. If it is left on, the first
+/// `cargo run` to exit non-zero (which is every run this job exists to
+/// report: 5 unpinned divergence, 4 stale pin, 3 unanswered question,
+/// 2 misconfiguration) aborts the step at that pipeline, so
+/// `differential.json` is never written and the upload step's
+/// `if-no-files-found: warn` turns the missing report into a warning
+/// nobody reads. The machine-readable report would exist only on the
+/// runs that did not need it.
+///
+/// This is not a grep for `set +e`: the script is EXECUTED under the
+/// same `bash -e` GitHub would use, with `cargo` stubbed to exit 5, and
+/// the assertions are on what the step produced. A step that inherits
+/// errexit prints nothing and writes no JSON, which is exactly the
+/// failure the earlier fix to this step missed by reordering the lines
+/// and leaving the `-e` alone.
+#[test]
+fn the_differential_step_does_not_inherit_errexit() {
+    let step = differential_step("Differential");
+    assert!(
+        key(&step, "shell").is_none(),
+        "this test models GitHub's DEFAULT shell for a run: step (`bash -e {{0}}`); if the \
+         step now names its own `shell:`, this test must model that one instead"
+    );
+    let script = text(&step, "run");
+
+    let dir = std::env::temp_dir().join(format!(
+        "sulo-testharness-differential-step-{}",
+        std::process::id()
+    ));
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).expect("temp dir");
+    let cargo = bin.join("cargo");
+    // Every exit code this job cares about is non-zero; 5 is the
+    // headline one, an unpinned divergence.
+    std::fs::write(
+        &cargo,
+        "#!/bin/sh\necho 'stub differential output'\nexit 5\n",
+    )
+    .expect("stub");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    let script_path = dir.join("step.sh");
+    std::fs::write(&script_path, script).expect("script");
+
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let out = std::process::Command::new("bash")
+        .arg("-e")
+        .arg(&script_path)
+        .current_dir(&dir)
+        .env("PATH", path)
+        .output()
+        .expect("bash is required to run the workflow script");
+
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let json = dir.join("differential.json");
+    let json_written = json.is_file() && std::fs::metadata(&json).map(|m| m.len()).unwrap_or(0) > 0;
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        stdout.contains("differential exited 5"),
+        "the step aborted before it could report its own exit code, which is what an \
+         inherited `-e` does. Add `set +e` to the script's `set` line. stdout was: {stdout}"
+    );
+    assert!(
+        json_written,
+        "the step never wrote differential.json, so the machine-readable report would \
+         exist only on the runs that did not need it. An inherited `-e` is the cause"
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(5),
+        "the step must re-raise the text run's exit code as its own"
     );
 }

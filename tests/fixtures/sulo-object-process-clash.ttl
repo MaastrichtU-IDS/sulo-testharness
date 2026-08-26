@@ -1,0 +1,9 @@
+@prefix sulo: <https://w3id.org/sulo/> .
+@prefix ex:   <http://example.org/> .
+
+# One individual typed both sulo:Object and sulo:Process, which
+# sulo.ttl declares owl:disjointWith. Merged with real SULO this is
+# inconsistent under any sound reasoner, so it is the differential's
+# control for "HermiT can see SULO's own axioms", as opposed to
+# merely parsing the file.
+ex:both a sulo:Object, sulo:Process .

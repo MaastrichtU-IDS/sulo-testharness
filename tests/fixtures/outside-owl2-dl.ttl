@@ -1,0 +1,22 @@
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix ex:   <http://example.org/> .
+
+<http://example.org/onto> a owl:Ontology .
+
+# A transitive (hence non-simple) property used in a cardinality
+# restriction. Syntactically fine, so `robot merge` accepts it, but
+# outside OWL 2 DL, so `robot reason` refuses it: exit 1 with a
+# message that is NOT "the ontology is inconsistent".
+#
+# This is the only route the driver's public API has into the second
+# step's error arm (a missing or unparseable input fails in the first
+# step instead), and that arm is the one that decides whether a broken
+# invocation is reported as a detected clash.
+ex:p a owl:ObjectProperty, owl:TransitiveProperty .
+
+ex:A a owl:Class ;
+    rdfs:subClassOf [ a owl:Restriction ;
+        owl:onProperty ex:p ;
+        owl:maxCardinality "1"^^xsd:nonNegativeInteger ] .

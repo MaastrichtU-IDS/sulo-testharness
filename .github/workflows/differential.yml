@@ -1,0 +1,225 @@
+# The HermiT differential (spec 5.3, plan phase 7).
+#
+# rustdl is sound but incomplete, so "not entailed" from it is an
+# absence of proof and never a proof of absence. HermiT is complete for
+# OWL 2 DL, so it is the oracle of record for exactly those answers.
+# This job puts every absence-resting answer the harness produces to
+# HermiT through ROBOT, and reports where the two reasoners disagree.
+#
+# It is NOT part of ci.yml and is NOT required for the harness's own
+# tests to pass. It needs a JVM and a ROBOT jar, neither of which may
+# leak into the default or local path.
+#
+# # Two things about this job that look wrong and are not
+#
+# 1. **It sets SULO_ROBOT_JAR_REQUIRED, and that is load-bearing.**
+#    Every jar-gated test in this repository skips cleanly when
+#    SULO_ROBOT_JAR is unset, which is right on a laptop with no Java
+#    and catastrophic here: a typo in the step below that exports the
+#    jar path would leave every one of those tests skipping and this
+#    job reporting a confident green having asserted nothing. The
+#    second variable turns that skip into a failure (plan ruling 9,
+#    hermit::resolve_jar).
+#
+# 2. **This job is GREEN today, and the one real divergence is
+#    pinned, not silenced.** `suites/sulo/restrictions/timeinstant-
+#    datarange` asserts a data-range allValuesFrom that horned-owl drops
+#    on load, so rustdl reports the offending data consistent and HermiT
+#    finds the clash. That is a real disagreement between two reasoners
+#    about real SULO, and it is recorded in `suites/sulo.divergences`
+#    with BOTH answers, so a reader can see what the documented
+#    disagreement is rather than only that one exists.
+#
+#    The pin is diffed in BOTH directions (ruling 12, src/divergences.rs):
+#
+#      * a divergence NOT in the pin is exit 5, and this job goes red;
+#      * a divergence IN the pin that no longer occurs is exit 4, and
+#        this job ALSO goes red. That direction is the point. rustdl
+#        gaining the capability, or SULO changing, or the case moving,
+#        is exactly the news this job exists to deliver, and a pin that
+#        only caught new divergences would absorb it silently.
+#
+#    Do NOT reach for `continue-on-error`, and do not add `--filter` to
+#    the step below (it is refused anyway: a filtered run cannot judge a
+#    whole-suite pin). Either would turn the one job in this repository
+#    whose whole purpose is to detect disagreement into a job that can
+#    never report one, which is the defect shape this project keeps
+#    finding. Re-baselining is `--accept-divergences`, it is never
+#    automatic, and `tests/divergences.rs` diffs the checked-in pin
+#    against a table so a re-baseline cannot be committed without a
+#    reviewed edit.
+name: HermiT differential
+
+on:
+  # Never on push: a two-minute JVM job on every branch push buys
+  # nothing that a scheduled and on-demand run does not.
+  workflow_dispatch:
+  schedule:
+    # Weekly, Mondays 04:00 UTC. The two reasoners cannot disagree
+    # about an ontology that has not changed, so the useful cadence is
+    # "often enough to catch a SULO bump", not "every commit".
+    - cron: "0 4 * * 1"
+
+env:
+  CARGO_TERM_COLOR: always
+  # Measured: ROBOT 1.9.7, the version every probe encoding in
+  # src/differential.rs was verified against. Not "latest": a ROBOT
+  # bump that changed the `ontology is inconsistent` message would turn
+  # every INCONSISTENT into an ERROR, which is Indeterminate and exit
+  # 3, so it would be loud rather than silent, but it would still be a
+  # surprise nobody asked for.
+  ROBOT_VERSION: "1.9.7"
+
+jobs:
+  differential:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: sulo-testharness
+
+    steps:
+      # Same two-checkout layout as ci.yml, and for the same reason:
+      # the suite reads real SULO at the hard-coded relative path
+      # ../sulo/sulo.ttl, so the SULO repo must be a SIBLING of this
+      # one rather than sit at the workspace root.
+      - name: Check out sulo-testharness
+        uses: actions/checkout@v4
+        with:
+          path: sulo-testharness
+
+      - name: Check out SULO as a sibling
+        uses: actions/checkout@v4
+        with:
+          repository: AIDAVA-DEV/sulo
+          path: sulo
+
+      - name: Install Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # The toolchain version is pinned by the `toolchain:` input and
+      # by rust-toolchain.toml, exactly as in ci.yml, so a runner image
+      # bump cannot drift this job onto a different compiler.
+      - name: Install Rust 1.95.0
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sulo-testharness
+
+      - name: Download ROBOT
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error \
+            --output robot.jar \
+            "https://github.com/ontodev/robot/releases/download/v${ROBOT_VERSION}/robot.jar"
+          # A smoke test, not decoration. A truncated or HTML-error
+          # download is still a file, and a file is all that
+          # hermit::resolve_jar can check for; without this step a bad
+          # download would surface as one ROBOT error per question,
+          # which is Indeterminate and exit 3, and a reader would spend
+          # a while working out why. The reference sha256 of the 1.9.7
+          # jar this work was verified against is
+          # 91890c2e83d0f092dd08731376f154b36610544cfbe8685337a1bf7244ccaa2d
+          sha256sum robot.jar
+          java -jar robot.jar --version
+
+      # Ruling 9. These are the tests that hold the differential's own
+      # machinery up: the four ROBOT answers, every probe encoding in
+      # BOTH directions against real SULO, and exit 5 observed from the
+      # binary. With SULO_ROBOT_JAR_REQUIRED set, a jar this job failed
+      # to configure is a failure rather than a skip.
+      - name: Jar-gated tests, in strict mode
+        env:
+          SULO_ROBOT_JAR: ${{ github.workspace }}/sulo-testharness/robot.jar
+          SULO_ROBOT_JAR_REQUIRED: "1"
+        run: cargo test --test hermit --test differential --test divergences --test cli
+
+      # The run itself. Its exit code is the job's outcome: 5 on a
+      # divergence the pin does not describe, 4 on a pinned divergence
+      # that no longer occurs, 3 on a question neither reasoner could be
+      # asked, 2 on a configuration error, 0 only when every question
+      # was put to both reasoners, every answer matched or was pinned,
+      # and every pin was confirmed. See point 2 of this file's header
+      # before reaching for anything that would quiet this step.
+      #
+      # `--suite` is spelled exactly as the pin's `# suite:` header
+      # spells it; a different spelling of the same directory is
+      # reported as re-baseline required rather than compared.
+      #
+      # `set +e` is load-bearing, and the `+` is the load-bearing
+      # character. GitHub runs a `run:` step that names no `shell:` as
+      # `bash -e {0}`, so errexit is ON before the script's first line
+      # and `set -uo pipefail` does NOT clear it: `set -u` and `set -o`
+      # turn options on, and nothing here turns `-e` off but `set +e`.
+      #
+      # With errexit left on, the first `cargo run` to exit non-zero
+      # (5 on an unpinned divergence, 4 on a stale pin, 3 on an
+      # unanswered question, 2 on a misconfiguration) aborts the step
+      # at that pipeline. `differential.json` is never written, the
+      # `echo` and the explicit `exit` never run, and the upload step's
+      # `if-no-files-found: warn` downgrades the missing report to a
+      # warning nobody reads. The machine-readable report would exist
+      # only on the runs that did not need it.
+      #
+      # This step has been "fixed" once before by reordering the lines
+      # while leaving the `-e` in place, so: the ordering was never the
+      # bug, the inherited errexit was. `tests/action.rs`
+      # (`the_differential_step_does_not_inherit_errexit`) reads this
+      # step's WHOLE `run:` script out of this file and executes it
+      # under `bash -e` with `cargo` replaced by a stub that exits 5,
+      # then asserts on the three things an inherited `-e` would take
+      # away: the `differential exited 5` line on stdout, a non-empty
+      # `differential.json` on disk, and 5 as the script's own exit
+      # code.
+      #
+      # Both captures below read STDOUT and nothing else. Under
+      # `--format json` every route the binary can take now writes one
+      # JSON document there, including the three that render no report
+      # at all (a configuration error, a `--accept-divergences`
+      # re-baseline, an unreadable pin), so the uploaded
+      # `differential.json` is never a 0-byte file. `differential.txt`
+      # comes from the TEXT run, and on a configuration error it IS
+      # still empty: that route writes only to stderr, which lands in
+      # this step's log rather than in the artifact.
+      - name: Differential
+        run: |
+          set +e -uo pipefail
+          cargo run --release -- differential \
+            --suite suites/sulo \
+            --ontology ../sulo/sulo.ttl \
+            --robot robot.jar \
+            --workdir differential-probes \
+            --divergences suites/sulo.divergences \
+            --format text | tee differential.txt
+          status=${PIPESTATUS[0]}
+          cargo run --release -- differential \
+            --suite suites/sulo \
+            --ontology ../sulo/sulo.ttl \
+            --robot robot.jar \
+            --workdir differential-probes \
+            --divergences suites/sulo.divergences \
+            --format json > differential.json || true
+          echo "differential exited ${status}"
+          exit "${status}"
+
+      # `always()`, because the report is at its most useful in exactly
+      # the run that failed. A divergence is only actionable if the
+      # reader can open the probe ontology that produced it, so the
+      # per-question working directories go up too.
+      - name: Upload the differential report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: differential-report
+          path: |
+            sulo-testharness/differential.json
+            sulo-testharness/differential.txt
+            sulo-testharness/differential-probes/
+            sulo-testharness/suites/sulo.divergences
+          if-no-files-found: warn
