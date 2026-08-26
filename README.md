@@ -16,11 +16,11 @@ This harness makes those regressions fail.
 
 ## Status
 
-Complete and passing, 198 tests: the engine (manifest parsing, hermetic Turtle
+Complete and passing, 260 tests: the engine (manifest parsing, hermetic Turtle
 loading with axiom-loss detection, typed claims, the reasoner oracle, Manchester
 class-expression checks, a consistency gate, a golden inference-closure diff),
-the competency-question path (SPARQL over a materialised inference closure), and
-the SULO suite itself.
+the competency-question path (SPARQL over a materialised inference closure), the
+SULO suite itself, and a CLI with a composite GitHub Action for consumer CI.
 
 ### The suite
 
@@ -52,17 +52,11 @@ ontology.
 
 ### Not yet done
 
-The CLI ships only the `golden` subcommand. The 66-case suite runs under
-`cargo test`, so a consumer needs this repository and a Rust toolchain rather
-than a pinned binary. Spec section 6 calls for a `run` subcommand with `--json`
-and `--junit` over `report::render`, plus an `action.yml`; none of the three
-exist yet, and exit codes `1`, `3`, and `5` are therefore unreachable from the
-binary today. That is the precondition for the composite GitHub Action and the
-consumer workflow in `AIDAVA-DEV/sulo`.
-
-Also outstanding: the HermiT differential (spec 5.3), and three of the five
-golden-closure components, which need a probe ABox since `sulo.ttl` declares no
-individuals.
+The HermiT differential (spec 5.3), which is why exit code `5` (oracle
+divergence) is documented but not yet reachable from the binary, and why the
+one case asserting a data range the pinned reasoner cannot enforce is deferred
+rather than run. Also outstanding: three of the five golden-closure components,
+which need a probe ABox since `sulo.ttl` declares no individuals.
 
 ## Design
 
@@ -86,24 +80,47 @@ several claims this project made and later had to retract, is in
 
 ## Running it
 
-The suite runs as tests, and expects a SULO checkout as a sibling directory:
+Everything expects a SULO checkout as a sibling directory:
 
 ```sh
 git clone https://github.com/AIDAVA-DEV/sulo ../sulo
-cargo test
 ```
 
-Compare the inferred closure against the committed golden file:
+Run the suite:
+
+```sh
+cargo run -- run --suite suites/sulo --ontology ../sulo/sulo.ttl
+```
+
+`--format json|junit` for machine consumers, `--filter <substr>` to narrow to a
+group or a single case. A suite root with no cases, a filter matching nothing,
+and a selection every one of whose cases is deferred are all configuration
+errors (exit 2) rather than a green run over nothing.
+
+Compare the inferred closure against the committed golden file, and re-baseline
+it deliberately after a legitimate change:
 
 ```sh
 cargo run -- golden --ontology ../sulo/sulo.ttl --golden suites/sulo.golden
-```
-
-Re-baseline it deliberately after a legitimate change:
-
-```sh
 cargo run -- golden --ontology ../sulo/sulo.ttl --golden suites/sulo.golden --accept-golden
 ```
+
+Run the harness's own tests, including the mutation self-test:
+
+```sh
+cargo test
+```
+
+### In someone else's CI
+
+```yaml
+- uses: MaastrichtU-IDS/sulo-testharness@v0.1.0
+  with: { ontology: sulo.ttl }
+```
+
+The release attaches a static `linux-x86_64` binary, a `macos-aarch64` binary,
+and the tag's own suite, so a consumer needs no Rust toolchain and always gets
+the cases and the engine that were tested together. No release is cut yet.
 
 ## Dependency pinning
 

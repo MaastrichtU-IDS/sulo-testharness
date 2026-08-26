@@ -294,7 +294,8 @@ The JVM stays out of the default and local path. It is a CI job only.
 - `0` all checks pass (unrefuted Passes reported in the summary)
 - `1` any Fail
 - `2` harness or configuration error (bad YAML, missing file, parse failure)
-- `3` any Indeterminate, unless `--allow-indeterminate`
+- `3` any Indeterminate, unless `--allow-indeterminate`, which lowers 3 to 0
+  and can never suppress a `Fail` (Fail outranks Indeterminate in aggregation)
 - `4` golden closure drift, or re-baseline required
 - `5` oracle divergence between rustdl and HermiT
 
@@ -316,8 +317,8 @@ sulo-testharness/
     oracle.rs     # Claims -> owl-dl-reasoner queries -> Verdict
     cq.rs         # materialise -> oxigraph store -> SPARQL -> row comparison
     suite.rs      # discovery, filtering, per-case orchestration
-    report.rs     # pretty stdout, --json, --junit
-    main.rs
+    report.rs     # pretty stdout, --format json, --format junit
+    main.rs       # `run` and `golden` subcommands
   suites/sulo/    # the reference SULO suite
   mutants/        # deliberately broken sulo.ttl variants, for self-testing
   action.yml      # composite GitHub Action for consumer CI
@@ -887,6 +888,34 @@ it doubles as the harness's own regression suite. The three errors above are als
 the argument for building phase 5 early rather than last: every one of them was
 invisible to review and obvious to a mutant.
 
+## 10.2 The CLI surface
+
+Two subcommands. The exit codes of 5.4 are reachable from the binary, and
+`tests/cli.rs` observes every one of them by launching it; a unit test over
+`verdict::exit_code` cannot catch a `main` that forgets to propagate, or that
+aggregates the wrong set, or that prints a report and returns success anyway.
+
+```
+sulo-testharness run --suite <dir> [--ontology <ttl>] [--filter <substr>]
+                     [--format text|json|junit]
+                     [--deferred skip|include|only] [--allow-indeterminate]
+
+sulo-testharness golden --ontology <ttl> --golden <file> [--accept-golden]
+```
+
+Three ways a run could check nothing and still report a pass are refused as
+configuration errors (exit 2), not tolerated: a suite root holding no cases, a
+`--filter` matching nothing, and a selection every one of whose cases is
+deferred. A `*.yml` in the suite tree is refused by name for the same reason:
+it would be read by nobody and reported by nothing.
+
+`--deferred` governs the cases tagged `oracle-hermit`, whose oracle of record
+is the CI differential rather than the pinned reasoner (5.3, and the note at
+the end of section 9). The default, `skip`, names and counts them but does not
+run them, and they are a distinct type from a case result so that reaching the
+exit-code aggregation is structurally impossible rather than filtered against.
+`only` runs exactly them, and is the seam the phase 7 differential drives.
+
 ## 11. CI integration
 
 A release workflow builds a static `linux-x86_64` binary, plus
@@ -895,7 +924,7 @@ A release workflow builds a static `linux-x86_64` binary, plus
 and runs it. Consumer CI in the SULO repository becomes:
 
 ```yaml
-- uses: AIDAVA-DEV/sulo-testharness@v0.1.0
+- uses: MaastrichtU-IDS/sulo-testharness@v0.1.0
   with: { ontology: sulo.ttl }
 ```
 
