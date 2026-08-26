@@ -13,7 +13,7 @@
 //! increment or collapsing the `PASS*` tag to `PASS` left every test
 //! in the repository green.
 
-use sulo_testharness::report::render;
+use sulo_testharness::report::{render, render_json, render_junit};
 use sulo_testharness::suite::CaseResult;
 use sulo_testharness::verdict::{CheckOutcome, IndeterminateReason, Verdict};
 
@@ -213,5 +213,408 @@ fn fail_and_indeterminate_check_messages_and_the_skip_notice_are_rendered() {
     assert!(
         out.contains("remaining checks skipped (see gate)"),
         "a skipped case must say so, or its unrun checks read as passes, got: {out}"
+    );
+}
+
+// ---------------------------------------------------------------
+// `render_json`: the machine format, which must carry the same
+// honesty the text one does (ruling 6).
+// ---------------------------------------------------------------
+
+/// The four verdicts, one case each, in a fixed order, plus the
+/// per-check detail the JSON format is supposed to carry.
+fn four_verdict_results() -> Vec<CaseResult> {
+    vec![
+        case_with(
+            "pass-case",
+            Verdict::Pass,
+            vec![check("pos", Verdict::Pass)],
+            false,
+        ),
+        // The id deliberately does NOT contain the word "unrefuted".
+        // It did, and that made the JUnit name assertion below a check
+        // that could not fail: the marker test passed on the id alone,
+        // so dropping the marker entirely left the test green.
+        case_with(
+            "negative-only-case",
+            Verdict::UnrefutedPass,
+            vec![check("neg", Verdict::UnrefutedPass)],
+            false,
+        ),
+        case_with(
+            "indet-case",
+            Verdict::Indeterminate(IndeterminateReason::Timeout),
+            vec![check(
+                "slow",
+                Verdict::Indeterminate(IndeterminateReason::Timeout),
+            )],
+            false,
+        ),
+        case_with(
+            "fail-case",
+            Verdict::Fail("expected entailed, but no proof was found: x".into()),
+            vec![check(
+                "pos",
+                Verdict::Fail("expected entailed, but no proof was found: x".into()),
+            )],
+            false,
+        ),
+    ]
+}
+
+fn parse_json(text: &str) -> serde_json::Value {
+    serde_json::from_str(text)
+        .unwrap_or_else(|e| panic!("render_json must emit valid JSON: {e}\n{text}"))
+}
+
+#[test]
+fn json_parses_and_names_all_four_verdicts_distinctly() {
+    let v = parse_json(&render_json(&four_verdict_results()));
+
+    let names: Vec<&str> = v["cases"]
+        .as_array()
+        .expect("cases must be an array")
+        .iter()
+        .map(|c| c["verdict"].as_str().expect("verdict must be a string"))
+        .collect();
+
+    assert_eq!(
+        names,
+        vec!["pass", "unrefuted_pass", "indeterminate", "fail"],
+        "collapsing unrefuted_pass into pass would hand a machine consumer \
+         exactly the overstatement this harness exists to prevent"
+    );
+    assert_eq!(v["summary"]["cases"], 4);
+    assert_eq!(v["summary"]["fail"], 1);
+    assert_eq!(v["summary"]["unrefuted_pass"], 1);
+    assert_eq!(v["summary"]["indeterminate"], 1);
+    assert_eq!(
+        v["summary"]["unrefuted_checks"], 1,
+        "unrefuted CHECKS are counted separately from unrefuted cases"
+    );
+}
+
+#[test]
+fn json_carries_the_failure_message_and_the_indeterminate_kind() {
+    let v = parse_json(&render_json(&four_verdict_results()));
+    let cases = v["cases"].as_array().expect("cases must be an array");
+
+    assert_eq!(
+        cases[3]["message"], "expected entailed, but no proof was found: x",
+        "a Fail's explanation must survive into the machine format"
+    );
+    assert_eq!(
+        cases[2]["indeterminate_kind"], "timeout",
+        "a consumer must be able to tell a timeout from axiom loss without \
+         pattern-matching on English"
+    );
+    assert!(
+        cases[0]["message"].is_null(),
+        "a Pass carries no message, and must not invent one"
+    );
+}
+
+#[test]
+fn json_carries_rests_on_absence_per_check_and_per_case() {
+    // Ruling 6. `rests_on_absence` is the flag a check sets when its
+    // meaning depends on something NOT being found; dropping it from
+    // the machine format restores the overstatement the design exists
+    // to prevent.
+    let mut cq_check = check("cq questions.rq", Verdict::Pass);
+    cq_check.rests_on_absence = true;
+    let results = vec![
+        case_with("cq-case", Verdict::Pass, vec![cq_check], false),
+        case_with(
+            "solid-case",
+            Verdict::Pass,
+            vec![check("pos", Verdict::Pass)],
+            false,
+        ),
+    ];
+
+    let v = parse_json(&render_json(&results));
+    let cases = v["cases"].as_array().expect("cases must be an array");
+
+    assert_eq!(
+        cases[0]["checks"][0]["rests_on_absence"], true,
+        "the per-check flag must be carried verbatim"
+    );
+    assert_eq!(
+        cases[0]["rests_on_absence"], true,
+        "a case holding such a check must roll the flag up"
+    );
+    assert_eq!(
+        cases[1]["rests_on_absence"], false,
+        "a case whose checks all rest on something positively found must not \
+         claim otherwise, or the flag means nothing"
+    );
+}
+
+#[test]
+fn json_rolls_an_unrefuted_check_into_rests_on_absence() {
+    // The per-check flag alone would report `false` for a case whose
+    // verdict IS an unrefuted negative, which is the one reading a
+    // consumer must never be given: an unrefuted pass is the textbook
+    // absence of proof.
+    let results = vec![case_with(
+        "negative-case",
+        Verdict::UnrefutedPass,
+        vec![check("neg", Verdict::UnrefutedPass)],
+        false,
+    )];
+
+    let v = parse_json(&render_json(&results));
+
+    assert_eq!(
+        v["cases"][0]["checks"][0]["rests_on_absence"], false,
+        "the raw per-check flag is not set by the entailment path"
+    );
+    assert_eq!(
+        v["cases"][0]["rests_on_absence"], true,
+        "but the case-level roll-up must still say the outcome rests on absence"
+    );
+}
+
+#[test]
+fn json_carries_baseline_loss_per_case_and_in_the_summary() {
+    // Ruling 6, the other half. The text report already opens with a
+    // baseline-loss preamble; a consumer reading only JSON must be able
+    // to see the same thing.
+    let msg = "conversion: 2 dropped (SubClassOf: unsupported data range x2)";
+    let results = vec![
+        CaseResult {
+            id: "lossy".into(),
+            verdict: Verdict::Pass,
+            checks: vec![],
+            skipped: false,
+            baseline_loss: vec![msg.to_string()],
+        },
+        case_with("clean", Verdict::Pass, vec![], false),
+    ];
+
+    let v = parse_json(&render_json(&results));
+
+    assert_eq!(v["cases"][0]["baseline_loss"][0], msg);
+    assert_eq!(
+        v["cases"][1]["baseline_loss"].as_array().map(Vec::len),
+        Some(0),
+        "a case that carried no loss must report none"
+    );
+    assert_eq!(
+        v["summary"]["baseline_loss"][0], msg,
+        "the summary must roll baseline loss up, deduplicated"
+    );
+}
+
+// ---------------------------------------------------------------
+// `render_junit`: ruling 7's four-into-three mapping.
+// ---------------------------------------------------------------
+
+/// Parse the JUnit output as XML, which is the assertion: a parser
+/// rejects the unescaped `<` that a string search would happily match.
+fn parse_xml(text: &str) -> roxmltree::Document<'_> {
+    roxmltree::Document::parse(text)
+        .unwrap_or_else(|e| panic!("render_junit must emit well-formed XML: {e}\n{text}"))
+}
+
+/// The `<testcase>` element for `name_starts_with`, or a panic naming
+/// what was actually there.
+fn testcase<'a, 'd: 'a>(doc: &'a roxmltree::Document<'d>, id: &str) -> roxmltree::Node<'a, 'd> {
+    doc.descendants()
+        .find(|n| {
+            n.has_tag_name("testcase") && n.attribute("name").is_some_and(|v| v.starts_with(id))
+        })
+        .unwrap_or_else(|| {
+            let seen: Vec<&str> = doc
+                .descendants()
+                .filter(|n| n.has_tag_name("testcase"))
+                .filter_map(|n| n.attribute("name"))
+                .collect();
+            panic!("no testcase named {id}; saw {seen:?}")
+        })
+}
+
+fn has_child(node: roxmltree::Node, tag: &str) -> bool {
+    node.children().any(|c| c.has_tag_name(tag))
+}
+
+#[test]
+fn junit_maps_all_four_verdicts_as_ruling_7_requires() {
+    let xml = render_junit(&four_verdict_results());
+    let doc = parse_xml(&xml);
+
+    let pass = testcase(&doc, "pass-case");
+    assert!(
+        !has_child(pass, "failure") && !has_child(pass, "skipped"),
+        "a Pass is a plain passing testcase"
+    );
+
+    let unrefuted = testcase(&doc, "negative-only-case");
+    assert!(
+        !has_child(unrefuted, "failure") && !has_child(unrefuted, "skipped"),
+        "an UnrefutedPass does not fail the build, matching verdict::exit_code"
+    );
+    assert_ne!(
+        unrefuted.attribute("name"),
+        Some("negative-only-case"),
+        "JUnit has no fifth state, so the distinction must live in the name: the \
+         bare case id is exactly what an UnrefutedPass must NOT render as"
+    );
+    assert!(
+        unrefuted
+            .attribute("name")
+            .is_some_and(|n| n.contains("unrefuted")),
+        "and the name must say which distinction it is carrying, got {:?}",
+        unrefuted.attribute("name")
+    );
+    let sysout = unrefuted
+        .children()
+        .find(|c| c.has_tag_name("system-out"))
+        .expect("an unrefuted pass must carry its caveat in system-out");
+    assert!(
+        sysout
+            .text()
+            .is_some_and(|t| t.contains("not a proof of non-entailment")),
+        "the system-out line must say what PASS* means, got {:?}",
+        sysout.text()
+    );
+
+    let indet = testcase(&doc, "indet-case");
+    assert!(
+        has_child(indet, "skipped"),
+        "an Indeterminate is <skipped>: it did not run to a decision"
+    );
+    assert!(
+        !has_child(indet, "failure"),
+        "an Indeterminate must NOT turn a consumer's build red on a reasoner timeout"
+    );
+
+    let fail = testcase(&doc, "fail-case");
+    assert!(has_child(fail, "failure"), "a Fail is <failure>");
+}
+
+#[test]
+fn junit_counts_only_fails_as_failures() {
+    // The attribute a CI dashboard reads. Counting the Indeterminate
+    // here would make a reasoner timeout indistinguishable from an
+    // ontology regression.
+    let doc_text = render_junit(&four_verdict_results());
+    let doc = parse_xml(&doc_text);
+    let suite = doc
+        .descendants()
+        .find(|n| n.has_tag_name("testsuite"))
+        .expect("a testsuite element");
+
+    assert_eq!(suite.attribute("tests"), Some("4"));
+    assert_eq!(
+        suite.attribute("failures"),
+        Some("1"),
+        "only the Fail counts as a failure"
+    );
+    assert_eq!(
+        suite.attribute("skipped"),
+        Some("1"),
+        "only the Indeterminate counts as skipped"
+    );
+}
+
+#[test]
+fn junit_escapes_every_xml_metacharacter_in_a_message() {
+    // Verdict messages carry Manchester expressions and full <IRI>
+    // forms, so all four of these occur in practice. Unescaped, the
+    // `<` alone makes the document unparseable, and a consumer's CI
+    // gets a broken report instead of a failing test.
+    let msg = r#"expected Feature <= (A & B) > C, but "x" <http://example.org/x> was not"#;
+    let results = vec![case_with(
+        "meta-case",
+        Verdict::Fail(msg.into()),
+        vec![],
+        false,
+    )];
+
+    let xml = render_junit(&results);
+    assert!(
+        !xml.contains("<http://example.org/x>"),
+        "the raw angle brackets must not reach the document, got: {xml}"
+    );
+
+    let doc = parse_xml(&xml);
+    let failure = testcase(&doc, "meta-case")
+        .children()
+        .find(|c| c.has_tag_name("failure"))
+        .expect("a Fail must produce a <failure>");
+
+    assert_eq!(
+        failure.text(),
+        Some(msg),
+        "the message must survive escaping and un-escaping unchanged"
+    );
+    assert_eq!(
+        failure.attribute("message"),
+        Some(msg),
+        "and so must the attribute form, where an unescaped quote would end it early"
+    );
+}
+
+#[test]
+fn junit_carries_baseline_loss_once_and_the_skip_notice_per_case() {
+    // Baseline loss is deduplicated to a testsuite-level system-out,
+    // mirroring the text report's preamble: on the real suite every
+    // case loads the same ontology, so repeating it per testcase
+    // produced 66 identical lines and buried the notes that differ.
+    // The skip notice, which IS per case, stays per case.
+    let loss = "SubClassOf: unsupported data range x2";
+    let results = vec![
+        CaseResult {
+            id: "gate-stopped".into(),
+            verdict: Verdict::Pass,
+            checks: vec![],
+            skipped: true,
+            baseline_loss: vec![loss.into()],
+        },
+        CaseResult {
+            id: "other".into(),
+            verdict: Verdict::Pass,
+            checks: vec![],
+            skipped: false,
+            baseline_loss: vec![loss.into()],
+        },
+    ];
+
+    let doc_text = render_junit(&results);
+    let doc = parse_xml(&doc_text);
+
+    assert_eq!(
+        doc_text.matches(loss).count(),
+        1,
+        "the same baseline message from two cases must appear once, got: {doc_text}"
+    );
+    let suite_note = doc
+        .descendants()
+        .find(|n| n.has_tag_name("testsuite"))
+        .and_then(|s| s.children().find(|c| c.has_tag_name("system-out")))
+        .and_then(|n| n.text())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        suite_note.contains(loss),
+        "baseline loss must reach a JUnit reader too, got: {suite_note}"
+    );
+
+    let case_note = testcase(&doc, "gate-stopped")
+        .children()
+        .find(|c| c.has_tag_name("system-out"))
+        .and_then(|n| n.text())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        case_note.contains("remaining checks skipped"),
+        "a case that stopped at the gate must say so, got: {case_note}"
+    );
+    assert!(
+        !testcase(&doc, "other")
+            .children()
+            .any(|c| c.has_tag_name("system-out")),
+        "a case with nothing case-specific to say must not carry an empty note"
     );
 }

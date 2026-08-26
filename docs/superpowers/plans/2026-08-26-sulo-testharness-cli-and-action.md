@@ -124,3 +124,69 @@ worth catching locally.
 * Add the CLI surface to the spec, since it was only ever implied.
 * README: replace the "Not yet done" paragraph about the missing CLI with the
   real usage, and keep exit code `5` honestly marked unreachable until phase 7.
+
+## Rulings made during execution
+
+8. **The release attaches a third asset, `sulo-suite.tar.gz`, built from the
+   tag's own `suites/` tree.** Task 4 as written did not work: the action
+   downloads a binary, but the cases live in this repository, so spec section
+   11's `with: { ontology: sulo.ttl }` would discover zero cases and hit ruling
+   2's exit 2 on every consumer run. Bundling the suite from the same tag also
+   guarantees the cases and the engine that runs them are the pair that were
+   tested together.
+
+9. **Ruling 7 governs the JUnit verdict mapping only, not the process exit
+   code.** Spec 5.4 governs the exit code, and it says `3` on any Indeterminate.
+   The composite action therefore fails the step on exit 3. An Indeterminate is
+   a result the harness explicitly refuses to vouch for, and its dominant cause
+   here is axiom loss rather than a flaky timeout: mapping it to success would
+   turn the loss-downgrade machinery, which exists to stop an unearned green,
+   into an unearned green.
+
+10. **`--allow-indeterminate` gets implemented, because spec 5.4 already
+    promises it.** With ruling 9 in force, a consumer hitting a genuine timeout
+    otherwise has no supported way to proceed. The flag is added to `run` in
+    Task 2 and surfaced as an action input in Task 4. It must never suppress a
+    `Fail`: it lowers `3` to `0` only when no `Fail` is present, and the
+    Indeterminates stay visible in the report either way.
+
+11. **musl, not glibc, for `linux-x86_64`.** A glibc binary built on
+    `ubuntu-latest` carries that image's glibc symbol versions and will not start
+    on an older glibc, which includes `ubuntu-22.04` runners and most `container:`
+    images. musl's allocator is slower under a tableau reasoner's allocation
+    pattern, and that cost is accepted: slower is a cost, will-not-start is an
+    outage. The release asserts staticness with `ldd` so a silent fall back to
+    dynamic linking fails the release rather than shipping.
+
+12. **`run` defers `oracle-hermit` cases by default, and this is not a new
+    decision.** `run --suite suites/sulo` exits 1 on healthy SULO because
+    `timeinstant-datarange` asserts a data-range `allValuesFrom` the pinned
+    reasoner provably cannot enforce. Spec line 746 already says such cases
+    carry `oracle: hermit` and run "only in the CI differential (5.3)", the case
+    already carries the `oracle-hermit` tag, and `tests/restrictions.rs` already
+    excludes it by a named `EXCLUDED` constant. Only the CLI failed to honour
+    it. Deferred cases are named in the report and counted, never silently
+    dropped, and are excluded from aggregation so they do not set the exit code.
+    Reporting that case as `Fail` would itself be an overstatement: it says SULO
+    regressed when in fact the reasoner cannot see the axiom, and the ontology
+    logs baseline loss for that exact axiom on every load.
+
+    Guard, because a tag that suppresses a case is a way to silence a failure:
+    the set of deferred cases is pinned in a test and diffed BOTH ways against a
+    live scan of the suite for the tag, so adding the tag to any further case is
+    a visible, reviewed act.
+
+13. **A `*.yml` file in the suite tree is refused, not skipped.** Discovery
+    matches `*.yaml`; one stray `.yml` among 66 `.yaml` files would be ignored
+    with no message, which is this project's recurring defect shape exactly.
+    Refusing loudly (exit 2, "rename to .yaml") keeps one convention and makes
+    the silent skip impossible. This follows the precedent set for the ambiguous
+    `ordered`/`exact` combination: refuse rather than guess, and refuse rather
+    than silently ignore.
+
+14. **The JUnit/exit-code asymmetry is deliberate and stays.** JUnit maps
+    `Indeterminate` to `<skipped>` while the process exits 3, so a consumer sees
+    a failing job whose report shows skips rather than failures. That is the
+    honest rendering in both channels: JUnit has no fifth state, and `<failure>`
+    would claim the ontology regressed when the reasoner merely could not
+    answer. The report carries a caveat line saying so.

@@ -1,0 +1,166 @@
+# Build the harness for a pushed tag and attach the binaries to that tag's
+# GitHub release.
+#
+# The premise recorded in spec section 4 is that consumer CI needs no
+# toolchain. That only holds if a prebuilt binary exists for a pinned tag,
+# which is what this workflow produces and what `action.yml` downloads.
+#
+# Asset names are a cross-file contract with `action.yml`. `tests/action.rs`
+# asserts that the `asset` values in the matrix below, paired with their
+# `runner_os`/`runner_arch`, are exactly the names the action's dispatch
+# table looks for, so renaming one file without the other fails the build
+# rather than a consumer's first run.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Do not cancel the sibling on the first failure: when a release build
+      # breaks, both platforms' logs are wanted at once. The release job
+      # needs both anyway, so nothing half-built can be published.
+      fail-fast: false
+      matrix:
+        include:
+          # Linux ships as a fully static musl binary. The dependency tree
+          # has no `*-sys` crate and no `cc` build script (verified against
+          # Cargo.lock: `libc` is bindings only, `windows-sys` is
+          # windows-gated), so the musl target needs no cross C toolchain
+          # and the git dependency on rustdl builds exactly as it does for
+          # glibc: a git dependency is source, and the target triple does
+          # not touch how cargo resolves it.
+          #
+          # The cost is musl's allocator, which is markedly slower than
+          # glibc's under the allocation-heavy, rayon-parallel workload a
+          # tableau reasoner produces. That is accepted deliberately: a
+          # glibc binary built here would carry this runner image's glibc
+          # symbol versions and would refuse to start on any older glibc,
+          # which includes `ubuntu-22.04` runners and most `container:`
+          # images consumers pin. A slower binary is a cost; a binary that
+          # cannot start is an outage for every such consumer.
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            asset: sulo-testharness-linux-x86_64
+            runner_os: Linux
+            runner_arch: X64
+          # macOS cannot link libSystem statically, so this one is
+          # dynamically linked against the OS. That is portable across
+          # macOS versions in a way glibc is not across Linux distributions.
+          - os: macos-14
+            target: aarch64-apple-darwin
+            asset: sulo-testharness-macos-aarch64
+            runner_os: macOS
+            runner_arch: ARM64
+
+    steps:
+      - name: Check out sulo-testharness
+        uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins 1.95.0; naming it again here means a
+      # release build cannot silently drift onto whatever the runner image
+      # ships, and installing through the preinstalled rustup keeps a
+      # workflow that publishes binaries free of third-party actions.
+      - name: Install Rust 1.95.0 for ${{ matrix.target }}
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal
+          rustup target add ${{ matrix.target }} --toolchain 1.95.0
+
+      # --locked, not just the committed lockfile: the horned-owl
+      # [patch.crates-io] redirect in Cargo.toml is what keeps SetOntology a
+      # single type across rustdl and this crate, and a release binary must
+      # be built from exactly the resolved tree the tag was tested with.
+      # If Cargo.lock is stale, this fails instead of resolving something
+      # else.
+      - name: Build
+        run: cargo +1.95.0 build --release --locked --target ${{ matrix.target }}
+
+      - name: Confirm the Linux binary is statically linked
+        if: matrix.runner_os == 'Linux'
+        run: |
+          set -euo pipefail
+          bin="target/${{ matrix.target }}/release/sulo-testharness"
+          file "$bin"
+          # ldd exits non-zero with "not a dynamic executable" on a static
+          # binary. A zero exit here means the musl build silently produced
+          # something that needs a loader on the consumer's machine.
+          if ldd "$bin" >/dev/null 2>&1; then
+            echo "::error::${{ matrix.asset }} is dynamically linked; the whole point of the musl target is that it is not"
+            ldd "$bin"
+            exit 1
+          fi
+
+      # A binary that was built but never executed is not evidence that it
+      # runs. This is the cheapest execution there is.
+      - name: Smoke test the binary
+        run: ./target/${{ matrix.target }}/release/sulo-testharness --help
+
+      - name: Stage the asset under its release name
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/sulo-testharness" "dist/${{ matrix.asset }}"
+          chmod +x "dist/${{ matrix.asset }}"
+
+      - name: Upload the asset for the release job
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Attach the assets to the release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      # Needed for the suite bundle below, which is built from the tag's
+      # own `suites/` tree.
+      - name: Check out sulo-testharness
+        uses: actions/checkout@v4
+
+      - name: Download the built assets
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # The action downloads a binary, not a repository, so without this the
+      # consumer snippet in spec section 11 has a binary and no cases to run.
+      # Rooted at `suites/` so the extracted tree matches the repository
+      # layout the manifests' relative `data/` and `queries/` paths assume.
+      - name: Bundle the suite
+        run: tar -czf dist/sulo-suite.tar.gz suites
+
+      - name: Attach everything to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          ls -l dist
+          # A tag can be pushed with the release already created from the UI
+          # or created only by this workflow. Handle both rather than
+          # failing on whichever case happens second.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          fi
+          gh release upload "$TAG" \
+            dist/sulo-testharness-linux-x86_64 \
+            dist/sulo-testharness-macos-aarch64 \
+            dist/sulo-suite.tar.gz \
+            --clobber

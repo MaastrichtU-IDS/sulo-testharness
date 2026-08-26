@@ -37,9 +37,21 @@ oxigraph = { version = "0.5.9", default-features = false }
 curie = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
+# The `--format json` payload. Built as a `serde_json::Value` tree rather
+# than by string concatenation so that a verdict message containing a quote
+# or a backslash cannot produce invalid JSON.
+serde_json = "1"
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 thiserror = "2"
+
+[dev-dependencies]
+# Used only by tests/report.rs, to PARSE the JUnit output rather than grep
+# it: an XML tree is what proves the escaping is correct, since a parser
+# rejects the unescaped `<` a string search would happily find. roxmltree is
+# dependency-free and decodes entities on read, so an assertion can compare a
+# parsed text node against the original message.
+roxmltree = "0.21"
 
 [patch.crates-io]
 # MUST match the rev rustdl pins, or SetOntology becomes two distinct types.
