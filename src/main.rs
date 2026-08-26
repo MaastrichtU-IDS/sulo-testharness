@@ -5,8 +5,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 use sulo_testharness::golden::{GoldenOutcome, check_golden};
 use sulo_testharness::load::load_file;
 use sulo_testharness::report::{render, render_json, render_junit};
-use sulo_testharness::suite::{RunOptions, RunOutcome, aggregate_cases, run_suite};
-use sulo_testharness::verdict::exit_code;
+use sulo_testharness::suite::{DeferredCases, RunOptions, RunOutcome, aggregate_cases, run_suite};
+use sulo_testharness::verdict::run_exit_code;
 
 #[derive(Parser)]
 #[command(
@@ -34,6 +34,32 @@ enum Format {
     Junit,
 }
 
+/// What to do with cases whose oracle of record is not this reasoner.
+///
+/// ONE flag with three values for the same reason `--format` is one
+/// flag: `--include-deferred --only-deferred` would be a request the
+/// program has to resolve by silently preferring one.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum Deferred {
+    /// Name them, count them, do not run them. The default, and what
+    /// spec line 746 asks for.
+    Skip,
+    /// Run them alongside everything else.
+    Include,
+    /// Run only them. The seam the phase 7 HermiT differential uses.
+    Only,
+}
+
+impl From<Deferred> for DeferredCases {
+    fn from(d: Deferred) -> Self {
+        match d {
+            Deferred::Skip => DeferredCases::Skip,
+            Deferred::Include => DeferredCases::Include,
+            Deferred::Only => DeferredCases::Only,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Run a suite of case manifests against an ontology.
@@ -54,6 +80,16 @@ enum Command {
         /// Output format.
         #[arg(long, value_enum, default_value_t = Format::Text)]
         format: Format,
+        /// What to do with cases tagged `oracle-hermit`, whose oracle
+        /// of record is the CI differential rather than this
+        /// reasoner. They are always named and counted in the report.
+        #[arg(long, value_enum, default_value_t = Deferred::Skip)]
+        deferred: Deferred,
+        /// Exit 0 rather than 3 when the run holds an Indeterminate
+        /// and no Fail (spec 5.4). Never suppresses a Fail, and the
+        /// Indeterminates stay in the report either way.
+        #[arg(long)]
+        allow_indeterminate: bool,
     },
     /// Compare the inferred closure against a golden file.
     Golden {
@@ -76,15 +112,18 @@ fn main() -> ExitCode {
             ontology,
             filter,
             format,
+            deferred,
+            allow_indeterminate,
         } => {
             let outcome = run_suite(&RunOptions {
                 suite: &suite,
                 ontology: ontology.as_deref(),
                 filter: filter.as_deref(),
+                deferred: deferred.into(),
             });
 
-            let results = match outcome {
-                RunOutcome::Ran(r) => r,
+            let (results, deferred) = match outcome {
+                RunOutcome::Ran { results, deferred } => (results, deferred),
                 // Exit 2: a harness or configuration error, which is
                 // NOT a statement about the ontology. Printed to
                 // stderr so a consumer redirecting stdout to a report
@@ -97,16 +136,18 @@ fn main() -> ExitCode {
             };
 
             let rendered = match format {
-                Format::Text => render(&results),
-                Format::Json => render_json(&results),
-                Format::Junit => render_junit(&results),
+                Format::Text => render(&results, &deferred),
+                Format::Json => render_json(&results, &deferred),
+                Format::Junit => render_junit(&results, &deferred),
             };
             print!("{rendered}");
 
             // Aggregated over EVERY case, not the last one, and
             // through the same precedence the per-case path uses.
+            // `deferred` is deliberately not passed: a case nothing
+            // was asked about cannot set an exit code.
             let verdict = aggregate_cases(&results);
-            ExitCode::from(u8::try_from(exit_code(&verdict)).unwrap_or(2))
+            ExitCode::from(u8::try_from(run_exit_code(&verdict, allow_indeterminate)).unwrap_or(2))
         }
         Command::Golden {
             ontology,

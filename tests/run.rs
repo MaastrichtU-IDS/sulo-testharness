@@ -20,7 +20,7 @@
 
 use std::path::{Path, PathBuf};
 
-use sulo_testharness::suite::{RunOptions, RunOutcome, aggregate_cases};
+use sulo_testharness::suite::{DeferredCases, RunOptions, RunOutcome, aggregate_cases};
 use sulo_testharness::verdict::{Verdict, exit_code};
 
 /// `clean.ttl` declares `ex:A`, and `ex:B rdfs:subClassOf ex:A`. So
@@ -87,16 +87,26 @@ fn copy_clean(dir: &Path) -> PathBuf {
 }
 
 fn run(dir: &Path, ontology: Option<&Path>, filter: Option<&str>) -> RunOutcome {
+    run_with(dir, ontology, filter, DeferredCases::Skip)
+}
+
+fn run_with(
+    dir: &Path,
+    ontology: Option<&Path>,
+    filter: Option<&str>,
+    deferred: DeferredCases,
+) -> RunOutcome {
     sulo_testharness::suite::run_suite(&RunOptions {
         suite: dir,
         ontology,
         filter,
+        deferred,
     })
 }
 
 fn ran(outcome: RunOutcome) -> Vec<sulo_testharness::suite::CaseResult> {
     match outcome {
-        RunOutcome::Ran(r) => r,
+        RunOutcome::Ran { results, .. } => results,
         RunOutcome::Config(msg) => panic!("expected the suite to run, got a config error: {msg}"),
     }
 }
@@ -104,7 +114,7 @@ fn ran(outcome: RunOutcome) -> Vec<sulo_testharness::suite::CaseResult> {
 fn config_error(outcome: RunOutcome) -> String {
     match outcome {
         RunOutcome::Config(msg) => msg,
-        RunOutcome::Ran(r) => panic!(
+        RunOutcome::Ran { results: r, .. } => panic!(
             "expected a configuration error, but {} case(s) ran and were judged",
             r.len()
         ),

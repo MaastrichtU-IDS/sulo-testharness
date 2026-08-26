@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use serde_json::json;
 
-use crate::suite::CaseResult;
+use crate::suite::{CaseResult, DeferredCase};
 use crate::verdict::{IndeterminateReason, Verdict};
 
 /// Render results, one block per case.
@@ -16,8 +16,13 @@ use crate::verdict::{IndeterminateReason, Verdict};
 /// still needs to know the run was made over an ontology with axioms
 /// the reasoner could not represent, even though that loss never
 /// affected any verdict.
+///
+/// Closes with the cases that were selected and deliberately NOT run
+/// (`suite::DeferredCase`). They are named and counted here rather
+/// than dropped, because a suppressed case that nothing prints is a
+/// silenced failure.
 #[must_use]
-pub fn render(results: &[CaseResult]) -> String {
+pub fn render(results: &[CaseResult], deferred: &[DeferredCase]) -> String {
     let mut out = String::new();
 
     let baseline: BTreeSet<&str> = results
@@ -59,6 +64,22 @@ pub fn render(results: &[CaseResult]) -> String {
 
         if r.skipped {
             out.push_str("         remaining checks skipped (see gate)\n");
+        }
+    }
+
+    // Named and counted, never silently dropped. Printed even though
+    // these cases set no verdict: a reader must be able to see that
+    // the run covered 65 of 66 cases without going and grepping the
+    // suite for the tag.
+    if !deferred.is_empty() {
+        out.push_str(&format!(
+            "\n{} case(s) DEFERRED, selected but not run, and excluded from the \
+             exit code:\n",
+            deferred.len()
+        ));
+        for d in deferred {
+            out.push_str(&format!("DEFER  {} ({})\n", d.id, d.path.display()));
+            out.push_str(&format!("         {}\n", d.reason));
         }
     }
 
@@ -137,7 +158,7 @@ fn indeterminate_kind(v: &Verdict) -> Option<&'static str> {
 /// caller aggregates through `verdict::aggregate` and exits on
 /// `verdict::exit_code`.
 #[must_use]
-pub fn render_json(results: &[CaseResult]) -> String {
+pub fn render_json(results: &[CaseResult], deferred: &[DeferredCase]) -> String {
     let mut cases = Vec::with_capacity(results.len());
     let mut unrefuted_checks = 0usize;
 
@@ -184,6 +205,20 @@ pub fn render_json(results: &[CaseResult]) -> String {
             .count()
     };
 
+    // Deferred cases are their own array, not entries in `cases` with
+    // a flag: a machine consumer summing `summary.pass + fail + ...`
+    // must not be able to mistake one for a case that was judged.
+    let deferred_json: Vec<_> = deferred
+        .iter()
+        .map(|d| {
+            json!({
+                "id": d.id,
+                "path": d.path.to_string_lossy(),
+                "reason": d.reason,
+            })
+        })
+        .collect();
+
     let payload = json!({
         "summary": {
             "cases": results.len(),
@@ -191,10 +226,12 @@ pub fn render_json(results: &[CaseResult]) -> String {
             "unrefuted_pass": count("unrefuted_pass"),
             "indeterminate": count("indeterminate"),
             "fail": count("fail"),
+            "deferred": deferred.len(),
             "unrefuted_checks": unrefuted_checks,
             "baseline_loss": baseline.iter().collect::<Vec<_>>(),
         },
         "cases": cases,
+        "deferred": deferred_json,
     });
 
     // `to_string_pretty` only fails on a non-string map key or a
@@ -233,6 +270,10 @@ const UNREFUTED_NOTE: &str = "PASS*: a negative expectation the reasoner failed 
 /// | `Indeterminate` | `<skipped>` |
 /// | `Fail` | `<failure>` |
 ///
+/// A deferred case (`suite::DeferredCase`) is not a verdict at all,
+/// and is emitted as a `<skipped>` testcase marked `[deferred]` in the
+/// name. It counts toward `tests` and toward `skipped`.
+///
 /// `Indeterminate` is deliberately NOT a failure: a reasoner timeout
 /// or an axiom the parser dropped must not turn a consumer's build red
 /// as though SULO had regressed. It is equally deliberately not a
@@ -245,29 +286,29 @@ const UNREFUTED_NOTE: &str = "PASS*: a negative expectation the reasoner failed 
 /// than dropped. It does not fail the build, matching
 /// `verdict::exit_code`.
 #[must_use]
-pub fn render_junit(results: &[CaseResult]) -> String {
+pub fn render_junit(results: &[CaseResult], deferred: &[DeferredCase]) -> String {
     let failures = results
         .iter()
         .filter(|r| matches!(r.verdict, Verdict::Fail(_)))
         .count();
+    // Deferred cases count as skips here, and toward `tests`, because
+    // they are emitted below as `<testcase><skipped/>`. A count that
+    // did not include them would leave a CI report claiming fewer
+    // tests than the testcase elements it carries.
     let skipped = results
         .iter()
         .filter(|r| matches!(r.verdict, Verdict::Indeterminate(_)))
-        .count();
+        .count()
+        + deferred.len();
+    let total = results.len() + deferred.len();
 
     let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     out.push_str(&format!(
-        "<testsuites tests=\"{}\" failures=\"{}\" skipped=\"{}\" errors=\"0\">\n",
-        results.len(),
-        failures,
-        skipped
+        "<testsuites tests=\"{total}\" failures=\"{failures}\" skipped=\"{skipped}\" errors=\"0\">\n"
     ));
     out.push_str(&format!(
-        "  <testsuite name=\"sulo-testharness\" tests=\"{}\" failures=\"{}\" \
-         skipped=\"{}\" errors=\"0\">\n",
-        results.len(),
-        failures,
-        skipped
+        "  <testsuite name=\"sulo-testharness\" tests=\"{total}\" failures=\"{failures}\" \
+         skipped=\"{skipped}\" errors=\"0\">\n"
     ));
 
     // Baseline loss goes here, DEDUPLICATED, exactly as `render` puts
@@ -336,6 +377,24 @@ pub fn render_junit(results: &[CaseResult]) -> String {
             ));
         }
 
+        out.push_str("    </testcase>\n");
+    }
+
+    // Deferred cases are emitted as skips, marked in the name, so a
+    // consumer reading only the JUnit report still sees every case
+    // that was selected and can tell which ones were not judged.
+    // `<skipped>` is the same state `Indeterminate` maps to, and for
+    // the same reason: it says "this did not run", not "this was
+    // fine".
+    for d in deferred {
+        out.push_str(&format!(
+            "    <testcase classname=\"sulo-testharness\" name=\"{}\">\n",
+            xml_escape(&format!("{} [deferred]", d.id))
+        ));
+        out.push_str(&format!(
+            "      <skipped message=\"{}\"/>\n",
+            xml_escape(&d.reason)
+        ));
         out.push_str("    </testcase>\n");
     }
 

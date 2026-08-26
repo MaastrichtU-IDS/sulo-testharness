@@ -67,14 +67,46 @@ fn non_yaml_files_are_not_cases() {
     touch(&root, "notes.md");
     touch(&root, "ontology.ttl");
     touch(&root, "question.rq");
-    // `.yml` is NOT discovered: ruling 1 says `*.yaml`. Pinned here so
-    // the exclusion is a decision on the record rather than an
-    // accident of the extension test.
-    touch(&root, "case.yml");
 
     let found = discover(&root).expect("the one yaml should be discovered");
 
     assert_eq!(found, vec![case], "only *.yaml files are cases");
+}
+
+/// Ruling 13: a `*.yml` is REFUSED, not skipped.
+///
+/// An earlier version of this suite pinned the opposite, that `.yml`
+/// was silently not discovered. One stray `.yml` among 66 `.yaml`
+/// files would then be read by nobody and reported by nothing: this
+/// project's recurring defect shape, a check that cannot fail, arrived
+/// at through a file extension. Refusing keeps one convention and
+/// makes the silent skip impossible.
+#[test]
+fn a_stray_yml_is_refused_rather_than_skipped() {
+    let root = scratch("stray-yml");
+    touch(&root, "case.yaml");
+    touch(&root, "oops.yml");
+
+    let err = discover(&root).expect_err("a stray *.yml must be refused");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("oops.yml") && msg.contains("Rename it to .yaml"),
+        "the refusal must name the file and the remedy: {msg}"
+    );
+}
+
+/// The refusal is scoped to cases. A `.yml` inside a fixture directory
+/// is not a case manifest and must not trip it, or a suite could never
+/// hold a `.yml` fixture at all.
+#[test]
+fn a_yml_inside_a_fixture_directory_is_not_refused() {
+    let root = scratch("yml-fixture");
+    let case = touch(&root, "case.yaml");
+    touch(&root, "data/thing.yml");
+    touch(&root, "queries/thing.yml");
+
+    let found = discover(&root).expect("a *.yml under data/ or queries/ is a fixture, not a case");
+    assert_eq!(found, vec![case]);
 }
 
 // ---------------------------------------------------------------

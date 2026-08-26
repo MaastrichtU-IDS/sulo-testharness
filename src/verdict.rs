@@ -87,3 +87,30 @@ pub fn exit_code(v: &Verdict) -> i32 {
         Verdict::Indeterminate(_) => 3,
     }
 }
+
+/// The exit code for a whole run, honouring `--allow-indeterminate`.
+///
+/// Spec 5.4 says exit `3` on "any Indeterminate, unless
+/// `--allow-indeterminate`". The flag exists for the consumer who hits
+/// a genuine reasoner timeout and has, with the composite action
+/// failing the step on 3, no other supported way forward.
+///
+/// It can never suppress a `Fail`, and that is structural rather than
+/// a rule to remember: the match below lowers the code only for the
+/// `Indeterminate` arm, and `aggregate` returns `Fail` for any set
+/// containing one (Fail outranks Indeterminate). So a run holding both
+/// a Fail and an Indeterminate aggregates to `Fail` and exits 1 with
+/// the flag set, exactly as without it. Written as a match on the
+/// verdict rather than as `if code == 3 { 0 }` for that reason: the
+/// numeric form would silently start suppressing any future verdict
+/// that also mapped to 3.
+///
+/// Indeterminates stay fully visible in every report format either
+/// way. This function decides an exit code; it hides nothing.
+#[must_use]
+pub fn run_exit_code(v: &Verdict, allow_indeterminate: bool) -> i32 {
+    match v {
+        Verdict::Indeterminate(_) if allow_indeterminate => 0,
+        other => exit_code(other),
+    }
+}

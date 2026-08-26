@@ -479,6 +479,34 @@ pub enum SuiteError {
          queries/ directory is a fixture and is deliberately not discovered."
     )]
     NoCases { path: PathBuf },
+    #[error(
+        "{path} has the extension .yml, but case manifests are discovered as \
+         *.yaml only, so this file would be read by nobody and reported by \
+         nothing. Rename it to .yaml. (A *.yml inside a data/ or queries/ \
+         directory is a fixture, not a case, and is not refused.)"
+    )]
+    StrayYml { path: PathBuf },
+    #[error(
+        "--deferred only was requested, but none of the {selected} selected \
+         case(s) under {path} carries the `{tag}` tag, so this run would check \
+         nothing and still report a pass"
+    )]
+    NoDeferredCases {
+        path: PathBuf,
+        selected: usize,
+        tag: &'static str,
+    },
+    #[error(
+        "every one of the {selected} selected case(s) under {path} carries the \
+         `{tag}` tag and is deferred by default, so this run would check nothing \
+         and still report a pass. Pass --deferred include or --deferred only to \
+         execute them."
+    )]
+    AllCasesDeferred {
+        path: PathBuf,
+        selected: usize,
+        tag: &'static str,
+    },
 }
 
 /// Find every case manifest under `root`, sorted.
@@ -556,10 +584,79 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), SuiteError> {
             walk(&path, out)?;
         } else if path.extension().is_some_and(|e| e == "yaml") {
             out.push(path);
+        } else if path.extension().is_some_and(|e| e == "yml") {
+            // Refused, not skipped. Discovery matches `*.yaml`, so a
+            // `.yml` case would be passed over in silence: an author
+            // would see a green run over 65 cases and have no way to
+            // learn that their 66th was never read. That is this
+            // project's recurring defect shape (a check that cannot
+            // fail) arriving through a filename. One convention,
+            // enforced loudly. Fixture directories never reach here,
+            // because the branch above skips them without descending,
+            // so a `data/*.yml` query fixture stays legal.
+            return Err(SuiteError::StrayYml { path });
         }
     }
 
     Ok(())
+}
+
+/// The tag marking a case whose oracle of record is HermiT, not the
+/// pinned rustdl build.
+///
+/// Spec line 746: a case asserting something rustdl provably cannot
+/// enforce (today, `TimeInstant subClassOf hasValue only
+/// (dateTime or dateTimeStamp)`, a data-range `allValuesFrom`) carries
+/// `oracle: hermit` and "runs only in the CI differential (5.3)".
+/// Running it under rustdl and reporting the result as a `Fail` would
+/// be exactly the overstatement this harness exists to prevent: it
+/// would say SULO regressed when in fact the reasoner cannot see the
+/// axiom, and `load.rs` logs baseline loss for that very axiom on
+/// every load.
+pub const DEFERRED_TAG: &str = "oracle-hermit";
+
+/// Why a deferred case did not run. One constant, so the text a
+/// consumer reads is the same in every report format.
+pub const DEFERRED_REASON: &str = "tagged `oracle-hermit`: the pinned reasoner provably cannot decide this case, so its oracle of record is the CI differential (spec 5.3), not this run. Not counted toward the exit code. Pass --deferred include or --deferred only to execute it anyway.";
+
+/// What a run does with the cases carrying [`DEFERRED_TAG`].
+///
+/// ONE flag with three values rather than two booleans, for the same
+/// reason `--format` is one flag: `--include-deferred --only-deferred`
+/// would otherwise be a request the program has to resolve by
+/// silently preferring one.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum DeferredCases {
+    /// Name them, count them, do not run them, and keep them out of
+    /// the aggregate. The default, and what spec line 746 asks for.
+    #[default]
+    Skip,
+    /// Run them alongside everything else, letting them set the exit
+    /// code like any other case. For someone deliberately checking
+    /// whether the reasoner has caught up.
+    Include,
+    /// Run ONLY them. This is the seam the phase 7 HermiT differential
+    /// (spec 5.3) will drive: that job needs to execute exactly the
+    /// cases whose oracle of record it is.
+    Only,
+}
+
+/// A case that was selected, named, and counted, but deliberately not
+/// run.
+///
+/// It exists as its own type rather than as a fifth `Verdict` because
+/// it is not a verdict: nothing was asked of the reasoner, so there is
+/// nothing to be honest or dishonest about. Keeping it out of
+/// `CaseResult` also makes it structurally impossible for a deferred
+/// case to reach `aggregate_cases` and set an exit code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeferredCase {
+    pub id: String,
+    /// The manifest this case was read from, so a reader can go and
+    /// look at it.
+    pub path: PathBuf,
+    /// Human-readable explanation; today always [`DEFERRED_REASON`].
+    pub reason: String,
 }
 
 /// What one whole-suite run was asked to do.
@@ -577,15 +674,28 @@ pub struct RunOptions<'a> {
     /// this repository are the file stems, so `--filter taxonomy`
     /// selects a group and `--filter deep-chain` selects one case.
     pub filter: Option<&'a str>,
+    /// What to do with cases tagged [`DEFERRED_TAG`]. See
+    /// [`DeferredCases`]; the default, `Skip`, is what spec line 746
+    /// asks for.
+    pub deferred: DeferredCases,
 }
 
 /// The result of one whole-suite run.
 pub enum RunOutcome {
-    /// Every selected case ran. Guaranteed non-empty: `run_suite`
-    /// refuses a run with nothing in it, because aggregating an empty
-    /// set yields Pass and a green build that asked the reasoner
-    /// nothing.
-    Ran(Vec<CaseResult>),
+    /// Every selected case that was not deferred ran. `results` is
+    /// guaranteed non-empty: `run_suite` refuses a run with nothing in
+    /// it, because aggregating an empty set yields Pass and a green
+    /// build that asked the reasoner nothing. That guarantee covers
+    /// deferral too: a selection in which EVERY case is deferred is a
+    /// configuration error, not a green run over zero cases.
+    Ran {
+        results: Vec<CaseResult>,
+        /// Cases that were selected but deliberately not run. Carried
+        /// beside the results, never inside them, so that a report can
+        /// name and count every one of them while `aggregate_cases`
+        /// cannot see them at all.
+        deferred: Vec<DeferredCase>,
+    },
     /// A configuration error: exit 2, and NOT a statement about the
     /// ontology. Carries the message to print.
     Config(String),
@@ -601,9 +711,15 @@ pub enum RunOutcome {
 ///
 /// `aggregate` returns Pass for an empty slice. That is safe here only
 /// because `run_suite` never calls this with an empty slice: it
-/// returns `Config` for a suite or filter that selected no cases. Do
-/// not remove that guard on the assumption this function is defensive;
+/// returns `Config` for a suite or filter that selected no cases, and
+/// for a selection every one of whose cases was deferred. Do not
+/// remove those guards on the assumption this function is defensive;
 /// it is not.
+///
+/// Deferred cases are not `CaseResult`s at all (see [`DeferredCase`]),
+/// so no deferred case can reach this function and set an exit code.
+/// That is a structural property, not a filter applied here, which is
+/// why there is no `if deferred` below to forget.
 #[must_use]
 pub fn aggregate_cases(results: &[CaseResult]) -> Verdict {
     let lifted: Vec<CheckOutcome> = results
@@ -675,8 +791,60 @@ pub fn run_suite(opts: &RunOptions) -> RunOutcome {
         }
     }
 
-    let mut results = Vec::with_capacity(cases.len());
+    // Split off the cases whose oracle of record is not this
+    // reasoner. Done AFTER loading, because the tag lives in the
+    // manifest: a deferred case still has to parse, so a typo in one
+    // is still exit 2 rather than a file nobody reads.
+    let mut to_run: Vec<(&Case, &PathBuf)> = Vec::with_capacity(cases.len());
+    let mut deferred: Vec<DeferredCase> = Vec::new();
     for (case, path) in cases.iter().zip(&selected) {
+        let tagged = case.tags.iter().any(|t| t == DEFERRED_TAG);
+        let execute = match opts.deferred {
+            DeferredCases::Skip => !tagged,
+            DeferredCases::Include => true,
+            DeferredCases::Only => tagged,
+        };
+        if execute {
+            to_run.push((case, path));
+        } else if tagged {
+            // Named and counted, never silently dropped. In `Only`
+            // mode the untagged cases are NOT recorded here: the
+            // operator asked for exactly the tagged ones, the same way
+            // `--filter` narrows without listing what it excluded.
+            deferred.push(DeferredCase {
+                id: case.id.clone(),
+                path: path.clone(),
+                reason: DEFERRED_REASON.to_string(),
+            });
+        }
+    }
+
+    // The same reasoning as `SuiteError::NoCases` and the empty-filter
+    // guard above, one level further in: a selection in which nothing
+    // is left to run would aggregate an empty set into a Pass and
+    // report a green build for a run that asked the reasoner nothing.
+    // Deferral must not become a way to reach that state.
+    if to_run.is_empty() {
+        let err = match opts.deferred {
+            DeferredCases::Only => SuiteError::NoDeferredCases {
+                path: opts.suite.to_path_buf(),
+                selected: selected.len(),
+                tag: DEFERRED_TAG,
+            },
+            // `Include` runs everything, so it cannot get here with a
+            // non-empty selection, and an empty selection was already
+            // refused above.
+            DeferredCases::Skip | DeferredCases::Include => SuiteError::AllCasesDeferred {
+                path: opts.suite.to_path_buf(),
+                selected: selected.len(),
+                tag: DEFERRED_TAG,
+            },
+        };
+        return RunOutcome::Config(err.to_string());
+    }
+
+    let mut results = Vec::with_capacity(to_run.len());
+    for (case, path) in to_run {
         let default_ontology = match (&case.ontology, opts.ontology) {
             // The case names its own ontology, so `run_case` never
             // reads this argument. Nothing is being defaulted to the
@@ -696,5 +864,5 @@ pub fn run_suite(opts: &RunOptions) -> RunOutcome {
         results.push(run_case(case, default_ontology));
     }
 
-    RunOutcome::Ran(results)
+    RunOutcome::Ran { results, deferred }
 }

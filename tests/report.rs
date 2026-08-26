@@ -34,7 +34,7 @@ fn baseline_loss_appears_as_a_report_preamble() {
         vec!["conversion: 2 dropped (SubClassOf: unsupported data range x2)".into()],
     )];
 
-    let out = render(&results);
+    let out = render(&results, &[]);
 
     assert!(
         out.contains("known baseline loss"),
@@ -50,7 +50,7 @@ fn baseline_loss_appears_as_a_report_preamble() {
 fn no_baseline_loss_means_no_preamble() {
     let results = vec![passing_case("c1", vec![])];
 
-    let out = render(&results);
+    let out = render(&results, &[]);
 
     assert!(
         !out.contains("known baseline loss"),
@@ -66,7 +66,7 @@ fn baseline_loss_is_deduplicated_across_cases() {
         passing_case("c2", vec![msg.clone()]),
     ];
 
-    let out = render(&results);
+    let out = render(&results, &[]);
     let occurrences = out.matches("SubClassOf: unsupported data range x2").count();
     assert_eq!(
         occurrences, 1,
@@ -116,7 +116,7 @@ fn unrefuted_passes_are_counted_and_reported_separately() {
         ),
     ];
 
-    let out = render(&results);
+    let out = render(&results, &[]);
 
     assert!(
         out.contains("2 check(s) marked PASS*"),
@@ -141,7 +141,7 @@ fn no_unrefuted_checks_means_no_unrefuted_summary() {
         vec![check("pos", Verdict::Pass)],
         false,
     )];
-    let out = render(&results);
+    let out = render(&results, &[]);
     assert!(
         !out.contains("PASS*"),
         "with nothing unrefuted, neither the tag nor the summary should appear, got: {out}"
@@ -164,7 +164,7 @@ fn the_four_verdicts_map_to_four_distinct_tags() {
         case_with("fail-case", Verdict::Fail("boom".into()), vec![], false),
     ];
 
-    let out = render(&results);
+    let out = render(&results, &[]);
     let tags: Vec<&str> = out
         .lines()
         .filter_map(|l| l.split_whitespace().next())
@@ -200,7 +200,7 @@ fn fail_and_indeterminate_check_messages_and_the_skip_notice_are_rendered() {
         true,
     )];
 
-    let out = render(&results);
+    let out = render(&results, &[]);
 
     assert!(
         out.contains("ontology plus data is inconsistent"),
@@ -269,7 +269,7 @@ fn parse_json(text: &str) -> serde_json::Value {
 
 #[test]
 fn json_parses_and_names_all_four_verdicts_distinctly() {
-    let v = parse_json(&render_json(&four_verdict_results()));
+    let v = parse_json(&render_json(&four_verdict_results(), &[]));
 
     let names: Vec<&str> = v["cases"]
         .as_array()
@@ -296,7 +296,7 @@ fn json_parses_and_names_all_four_verdicts_distinctly() {
 
 #[test]
 fn json_carries_the_failure_message_and_the_indeterminate_kind() {
-    let v = parse_json(&render_json(&four_verdict_results()));
+    let v = parse_json(&render_json(&four_verdict_results(), &[]));
     let cases = v["cases"].as_array().expect("cases must be an array");
 
     assert_eq!(
@@ -332,7 +332,7 @@ fn json_carries_rests_on_absence_per_check_and_per_case() {
         ),
     ];
 
-    let v = parse_json(&render_json(&results));
+    let v = parse_json(&render_json(&results, &[]));
     let cases = v["cases"].as_array().expect("cases must be an array");
 
     assert_eq!(
@@ -363,7 +363,7 @@ fn json_rolls_an_unrefuted_check_into_rests_on_absence() {
         false,
     )];
 
-    let v = parse_json(&render_json(&results));
+    let v = parse_json(&render_json(&results, &[]));
 
     assert_eq!(
         v["cases"][0]["checks"][0]["rests_on_absence"], false,
@@ -392,7 +392,7 @@ fn json_carries_baseline_loss_per_case_and_in_the_summary() {
         case_with("clean", Verdict::Pass, vec![], false),
     ];
 
-    let v = parse_json(&render_json(&results));
+    let v = parse_json(&render_json(&results, &[]));
 
     assert_eq!(v["cases"][0]["baseline_loss"][0], msg);
     assert_eq!(
@@ -440,7 +440,7 @@ fn has_child(node: roxmltree::Node, tag: &str) -> bool {
 
 #[test]
 fn junit_maps_all_four_verdicts_as_ruling_7_requires() {
-    let xml = render_junit(&four_verdict_results());
+    let xml = render_junit(&four_verdict_results(), &[]);
     let doc = parse_xml(&xml);
 
     let pass = testcase(&doc, "pass-case");
@@ -498,7 +498,7 @@ fn junit_counts_only_fails_as_failures() {
     // The attribute a CI dashboard reads. Counting the Indeterminate
     // here would make a reasoner timeout indistinguishable from an
     // ontology regression.
-    let doc_text = render_junit(&four_verdict_results());
+    let doc_text = render_junit(&four_verdict_results(), &[]);
     let doc = parse_xml(&doc_text);
     let suite = doc
         .descendants()
@@ -532,7 +532,7 @@ fn junit_escapes_every_xml_metacharacter_in_a_message() {
         false,
     )];
 
-    let xml = render_junit(&results);
+    let xml = render_junit(&results, &[]);
     assert!(
         !xml.contains("<http://example.org/x>"),
         "the raw angle brackets must not reach the document, got: {xml}"
@@ -581,7 +581,7 @@ fn junit_carries_baseline_loss_once_and_the_skip_notice_per_case() {
         },
     ];
 
-    let doc_text = render_junit(&results);
+    let doc_text = render_junit(&results, &[]);
     let doc = parse_xml(&doc_text);
 
     assert_eq!(

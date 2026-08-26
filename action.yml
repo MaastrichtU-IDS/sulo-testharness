@@ -37,6 +37,17 @@ inputs:
     description: "Report format: text, json, or junit."
     required: false
     default: text
+  allow-indeterminate:
+    description: >-
+      Set to "true" to exit 0 rather than 3 when the run holds an Indeterminate
+      and no Fail (spec 5.4). This never suppresses a Fail, and the
+      Indeterminates stay in the report either way. Reach for it only when a
+      genuine reasoner timeout is blocking you; an Indeterminate caused by
+      axiom loss means the reasoner saw a weaker ontology than the one that
+      ships, and silencing that is the unearned green this project exists to
+      prevent.
+    required: false
+    default: "false"
   version:
     description: >-
       Release tag of sulo-testharness to download, for example v0.1.0. Pin
@@ -114,6 +125,7 @@ runs:
         SUITE_DIR: ${{ steps.download.outputs.suite }}
         INPUT_ONTOLOGY: ${{ inputs.ontology }}
         INPUT_FORMAT: ${{ inputs.format }}
+        INPUT_ALLOW_INDETERMINATE: ${{ inputs.allow-indeterminate }}
       run: |
         # No -e here. The harness's exit code IS the result, and -e would
         # abort this script before the code could be reported. It is
@@ -126,6 +138,12 @@ runs:
         args=(run --suite "${SUITE_DIR}" --format "${INPUT_FORMAT}")
         if [ -n "${INPUT_ONTOLOGY}" ]; then
           args+=(--ontology "${INPUT_ONTOLOGY}")
+        fi
+        # Compared against the exact string "true" rather than tested for
+        # non-emptiness: `allow-indeterminate: false` is a non-empty string,
+        # and a truthiness test would turn an explicit "no" into a yes.
+        if [ "${INPUT_ALLOW_INDETERMINATE}" = "true" ]; then
+          args+=(--allow-indeterminate)
         fi
 
         status=0

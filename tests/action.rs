@@ -24,7 +24,13 @@ const REPO: &str = "MaastrichtU-IDS/sulo-testharness";
 const SUITE_BUNDLE: &str = "sulo-suite.tar.gz";
 
 /// The inputs spec section 11's consumer snippet and the plan's task 4 name.
-const DECLARED_INPUTS: [&str; 4] = ["format", "ontology", "suite", "version"];
+const DECLARED_INPUTS: [&str; 5] = [
+    "allow-indeterminate",
+    "format",
+    "ontology",
+    "suite",
+    "version",
+];
 
 fn repo_file(relative: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative)
