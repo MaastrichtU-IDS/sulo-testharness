@@ -148,3 +148,41 @@ required for the harness's own tests to pass.
 With the differential in place, `timeinstant-datarange` is no longer "checked by
 nothing". Update `DEFERRED_REASON`, `suites/sulo/restrictions/README.md`, and
 the `tests/deferred.rs` pin to say the differential is where it is decided.
+
+## Rulings made during execution
+
+7. **The question set widens to FAILING POSITIVE assertions.** `oracle::verdict_for`
+   tells the user, on a positive assertion that found no proof, "Incompleteness
+   is a possible cause; the CI differential settles it". That `Fail` rests on
+   absence of proof exactly as a negative `UnrefutedPass` does. Scoping the
+   differential to negatives and the gate would have shipped that message as a
+   falsehood. The message is right and the plan's scope was too narrow.
+
+   This is also the most valuable direction: a positive `Fail` HermiT cannot
+   prove either is a real SULO regression, while one HermiT CAN prove is a
+   rustdl incompleteness bug. That second outcome is precisely the signal spec
+   5.3 calls the most valuable either reasoner could produce.
+
+8. **A run that asks no questions is a configuration error, never agreement.**
+   A case carrying only positive assertions that all passed yields zero
+   questions, so a filter or suite selecting only such cases would report a
+   green differential having asked nothing. Same shape as the three guards
+   `run` already has, and refused the same way (exit 2).
+
+9. **CI must fail when the jar is missing, not skip.** The jar-gated tests skip
+   cleanly when `SULO_ROBOT_JAR` is unset, which is right for a laptop and
+   wrong for the differential job: a typo in the workflow step would produce a
+   permanently green job that asserted nothing. The CI job sets a second
+   variable that turns the skip itself into a failure.
+
+10. **Probe terms live in a namespace nothing else can bind.** The prototype
+    used `http://example.org/`, which is exactly what every suite fixture binds
+    `ex:` to. A collision would not error; it would silently make the witness an
+    individual the data already constrains, and the probe would answer a
+    question nobody asked. `http://sulo-testharness.invalid/differential#`
+    instead.
+
+11. **An unsupported class-expression shape is `Unencodable`, never
+    approximated.** Rendering an unknown shape as `owl:Thing` builds a probe
+    that cannot clash, which is a question that cannot fail. It is reported as
+    `Indeterminate` naming the variant.

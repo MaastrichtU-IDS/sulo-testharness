@@ -2,7 +2,9 @@
 
 pub mod claim;
 pub mod cq;
+pub mod differential;
 pub mod golden;
+pub mod hermit;
 pub mod load;
 pub mod manifest;
 pub mod materialize;

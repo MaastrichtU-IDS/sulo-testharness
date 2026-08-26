@@ -38,13 +38,17 @@ use crate::prefixes::{self, base_mapping, with_overrides};
 use crate::verdict::{CheckOutcome, IndeterminateReason, Verdict, aggregate};
 
 /// Name of the consistency-gate check when the case expects
-/// inconsistency. Shared between `run_case` (which produces it) and
-/// `downgrade_for_loss` (which must recognise it) so the two can
-/// never drift apart.
-const GATE_EXPECT_INCONSISTENT: &str = "gate: expected inconsistent";
+/// inconsistency. Shared between `run_case` (which produces it),
+/// `downgrade_for_loss` (which must recognise it) and
+/// `differential::questions` (which pairs its own gate question with
+/// the outcome recorded under this name) so the three can never drift
+/// apart. Public for that third reader: a differential that looked up
+/// a name nobody produces would find no rustdl answer for every case
+/// and report Indeterminate for the whole suite.
+pub const GATE_EXPECT_INCONSISTENT: &str = "gate: expected inconsistent";
 /// Name of the consistency-gate check when the case expects
 /// consistency. See `GATE_EXPECT_INCONSISTENT`.
-const GATE_EXPECT_CONSISTENT: &str = "gate: expected consistent";
+pub const GATE_EXPECT_CONSISTENT: &str = "gate: expected consistent";
 
 /// The outcome of one case.
 pub struct CaseResult {
