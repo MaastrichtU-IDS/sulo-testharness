@@ -1,0 +1,10 @@
+id: cq-empty-rows-not-exact
+description: >-
+  An empty expect_rows with exact: false asserts nothing at all:
+  rows::compare runs an empty expected loop, skips the leftover check,
+  and returns Ok regardless of what the query returned. A green check
+  that cannot fail, so load_case must refuse it.
+data: data/parts.ttl
+cq:
+  - query: queries/who.rq
+    exact: false

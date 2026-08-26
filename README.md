@@ -16,16 +16,53 @@ This harness makes those regressions fail.
 
 ## Status
 
-The **engine** is complete: manifest parsing, hermetic Turtle loading with
-axiom-loss detection, typed claims, the reasoner oracle, Manchester
-class-expression checks, a consistency gate, a mutation self-test, and a golden
-inference-closure diff. 111 tests.
+Complete and passing, 198 tests: the engine (manifest parsing, hermetic Turtle
+loading with axiom-loss detection, typed claims, the reasoner oracle, Manchester
+class-expression checks, a consistency gate, a golden inference-closure diff),
+the competency-question path (SPARQL over a materialised inference closure), and
+the SULO suite itself.
 
-The **SULO suite itself is not written yet**. Today the repository contains four
-proof cases, which exist to prove the mutation suite bites, not to provide
-coverage. See `docs/superpowers/plans/2026-08-23-sulo-testharness-cq-and-suite.md`
-for the plan that adds the competency-question path and the roughly 70-case
-suite.
+### The suite
+
+66 cases over six groups, each group's expected verdicts pinned in a table that
+is diffed against the directory listing in both directions, so neither a new
+case missing from the table nor a stale entry can hide.
+
+| Group | Cases | What it pins |
+| --- | ---: | --- |
+| `taxonomy` | 22 | Asserted and inferred subsumptions, non-subsumptions, 14 disjointness counter-examples, covering axioms, satisfiability |
+| `properties` | 9 | Inverse pairs, transitivity (and its absence for `isDirectPartOf`), reflexivity, subproperty axioms, functionality |
+| `restrictions` | 12 | `hasPart` propagation, `someValuesFrom` restrictions, the duration data range |
+| `domains-ranges` | 14 | Domain and range entailments for every object property, plus a range violation |
+| `patterns/pro` | 4 | The Process-Role-Object pattern and its role chain, including a competency question |
+| `patterns/solid` | 5 | The Single Object Literal Information Datum pattern, including a competency question |
+
+### Mutation self-test
+
+A suite that cannot fail is worse than no suite. Ten mutants, each a single
+documented edit to SULO, prove the suite bites: every `assert_caught` requires
+BOTH directions, a `Pass` on clean SULO and a `Fail` on the mutant. Every group
+has at least one caught mutant, and both competency questions are mutation
+proven.
+
+The mutants are re-derived in Rust from a live read of `../sulo/sulo.ttl` on
+every run and compared byte for byte, so a SULO bump that the mutants do not
+reflect is a build failure rather than a suite quietly testing a frozen
+ontology.
+
+### Not yet done
+
+The CLI ships only the `golden` subcommand. The 66-case suite runs under
+`cargo test`, so a consumer needs this repository and a Rust toolchain rather
+than a pinned binary. Spec section 6 calls for a `run` subcommand with `--json`
+and `--junit` over `report::render`, plus an `action.yml`; none of the three
+exist yet, and exit codes `1`, `3`, and `5` are therefore unreachable from the
+binary today. That is the precondition for the composite GitHub Action and the
+consumer workflow in `AIDAVA-DEV/sulo`.
+
+Also outstanding: the HermiT differential (spec 5.3), and three of the five
+golden-closure components, which need a probe ABox since `sulo.ttl` declares no
+individuals.
 
 ## Design
 
@@ -49,7 +86,7 @@ several claims this project made and later had to retract, is in
 
 ## Running it
 
-Tests expect a SULO checkout as a sibling directory:
+The suite runs as tests, and expects a SULO checkout as a sibling directory:
 
 ```sh
 git clone https://github.com/AIDAVA-DEV/sulo ../sulo

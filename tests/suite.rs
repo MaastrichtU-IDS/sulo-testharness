@@ -10,6 +10,7 @@ fn o(v: Verdict) -> CheckOutcome {
     CheckOutcome {
         name: "c".into(),
         verdict: v,
+        rests_on_absence: false,
     }
 }
 
@@ -86,6 +87,7 @@ fn loss_downgrades_the_gates_missed_inconsistency() {
         verdict: Verdict::Fail(
             "expected inconsistent, but the reasoner found it consistent".into(),
         ),
+        rests_on_absence: false,
     }];
 
     downgrade_for_loss(&mut outs, &loss);
@@ -107,6 +109,7 @@ fn loss_downgrades_the_gates_found_consistent_pass() {
     let mut outs = vec![CheckOutcome {
         name: "gate: expected consistent".into(),
         verdict: Verdict::Pass,
+        rests_on_absence: false,
     }];
 
     downgrade_for_loss(&mut outs, &loss);
@@ -130,6 +133,7 @@ fn loss_does_not_downgrade_the_gates_found_inconsistent_outcomes() {
         CheckOutcome {
             name: "gate: expected inconsistent".into(),
             verdict: Verdict::Pass,
+            rests_on_absence: false,
         },
         CheckOutcome {
             name: "gate: expected consistent".into(),
@@ -138,6 +142,7 @@ fn loss_does_not_downgrade_the_gates_found_inconsistent_outcomes() {
                  below would pass vacuously. Remaining checks skipped."
                     .into(),
             ),
+            rests_on_absence: false,
         },
     ];
     let before: Vec<Verdict> = outs.iter().map(|o| o.verdict.clone()).collect();
@@ -148,6 +153,87 @@ fn loss_does_not_downgrade_the_gates_found_inconsistent_outcomes() {
     assert_eq!(
         before, after,
         "a gate outcome that found a clash must never be downgraded by loss"
+    );
+}
+
+// ---------------------------------------------------------------
+// downgrade_for_loss: the competency-question shapes, which carry no
+// `oracle::NO_PROOF_MARKER` and no `GATE_*` name and so are matched
+// through `CheckOutcome::rests_on_absence` instead. Both polarities,
+// because over-downgrading is its own defect: a CQ Pass with
+// `exact: false` and every cell bound asserts only that certain rows
+// are PRESENT, which loss (a strict subset of the axioms, hence a
+// subset of the closure) can never manufacture.
+// ---------------------------------------------------------------
+
+/// A `CheckOutcome` shaped exactly like one `cq::check_cq` builds:
+/// a `cq <query>` name, and the `rests_on_absence` flag `check_cq`
+/// would have computed for that verdict and spec.
+fn cq_outcome(verdict: Verdict, rests_on_absence: bool) -> CheckOutcome {
+    CheckOutcome {
+        name: "cq queries/who-participated.rq".into(),
+        verdict,
+        rests_on_absence,
+    }
+}
+
+#[test]
+fn loss_downgrades_a_cq_fail_and_an_absence_claiming_cq_pass() {
+    let loss = vec!["parse: 4 triples unconsumed".to_string()];
+    let mut outs = vec![
+        // A CQ Fail. Built by `rows::compare`, so its message carries
+        // no NO_PROOF_MARKER: without the flag this reads as a
+        // trustworthy ontology regression, when the row may simply
+        // have been suppressed by the dropped axiom.
+        cq_outcome(
+            Verdict::Fail("missing expected row: {?p = <http://example.org/alice>}".into()),
+            true,
+        ),
+        // A CQ Pass whose spec said `exact: true`, an "and no other
+        // rows" claim. Loss shrinks the closure, so a suppressed
+        // extra row makes that claim pass unearned.
+        cq_outcome(Verdict::Pass, true),
+    ];
+
+    downgrade_for_loss(&mut outs, &loss);
+
+    assert!(
+        matches!(
+            outs[0].verdict,
+            Verdict::Indeterminate(IndeterminateReason::AxiomLoss(_))
+        ),
+        "a CQ Fail may be a loss artifact and must downgrade, got {:?}",
+        outs[0].verdict
+    );
+    assert!(
+        matches!(
+            outs[1].verdict,
+            Verdict::Indeterminate(IndeterminateReason::AxiomLoss(_))
+        ),
+        "a CQ Pass making an absence claim must downgrade, got {:?}",
+        outs[1].verdict
+    );
+}
+
+#[test]
+fn loss_does_not_downgrade_a_monotone_safe_cq_pass() {
+    // `exact: false` with every expected cell bound, over a MONOTONE
+    // query, asserts only presence, which axiom loss cannot fake in
+    // the passing direction. Downgrading it would overstate the
+    // harness's uncertainty, the mirror image of the defect above.
+    // The monotonicity condition is not decided here: `check_cq`
+    // owns it (see `cq::query_is_monotone`, and the LIMIT and
+    // aggregate tests in `tests/cq.rs`), and this function sees only
+    // the flag it produced.
+    let loss = vec!["parse: 4 triples unconsumed".to_string()];
+    let mut outs = vec![cq_outcome(Verdict::Pass, false)];
+
+    downgrade_for_loss(&mut outs, &loss);
+
+    assert_eq!(
+        outs[0].verdict,
+        Verdict::Pass,
+        "a subset CQ Pass with no unbound cell is monotone-safe and must stay Pass"
     );
 }
 

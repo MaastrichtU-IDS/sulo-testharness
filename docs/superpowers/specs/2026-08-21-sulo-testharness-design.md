@@ -239,23 +239,37 @@ Structurally blind to: property characteristics (transitivity, reflexivity,
 functionality), property chains, domains and ranges, disjointness, disjoint-union
 covering, and every ABox-level entailment.
 
-The consequence, measured against the four mutants in `mutants/`: the golden diff
-detects **one of four**. `no-subproperty-containment` moves the property
-hierarchy and is caught. `no-role-chain` is invisible because the reasoner's
-subproperty materialisation explicitly skips a chain sub-expression.
-`no-transitive-parthood` is invisible because `TransitiveObjectProperty` is not a
-materialised component kind and the class matrix is unmoved. `no-feature-union` is
-invisible because it removes only the covering half, while the four
-`subClassOf Feature` edges are asserted separately and pairwise disjointness
-survives in the redundant `AllDisjointClasses`.
+The consequence, measured by running `golden` against each of the ten mutants in
+`mutants/` and recording the exit code: the golden diff detects **two of ten**.
+This figure said "one of four" until the six later mutants were measured against
+it; it is a measurement, so re-run it when a mutant is added rather than
+predicting what the new one should do. No test pins the figure.
+
+Caught: `no-subproperty-containment` moves the property hierarchy;
+`no-feature-object` deletes `Feature subClassOf Object`, a named-to-named edge,
+which is exactly the shape the class matrix records, and it costs 14 rows.
+
+Blind to the other eight. `no-role-chain` because the reasoner's subproperty
+materialisation explicitly skips a chain sub-expression. `no-transitive-parthood`
+because `TransitiveObjectProperty` is not a materialised component kind.
+`no-participant-domain-and-inverse-range` (domains and ranges) and
+`no-object-process-disjoint` (disjointness) because both kinds are on the
+structurally-blind list above. `no-selfpart-feature-and-informationobject`,
+`no-selfpart-process`, and `no-quantity-unit-somevaluesfrom` because each removes
+a `subClassOf` whose superclass is an anonymous restriction, which no named-class
+subsumption, satisfiability, or equivalence entry can see, and no named class
+becomes unsatisfiable. `no-feature-union` because it removes only the covering
+half, while the four `subClassOf Feature` edges are asserted separately and
+pairwise disjointness survives in the redundant `AllDisjointClasses`.
 
 Three of the five components this section originally listed are therefore still
 absent: inferred class assertions, inferred property assertions, and inferred
-disjointness. They are exactly where the other three mutants live. Closing that
+disjointness. That is where most of the eight blind mutants live. Closing that
 needs a fixed probe ABox, since `sulo.ttl` declares no individuals, so it is a
 subsystem rather than a fix and belongs to the follow-on plan. Until it lands,
-the hand-written assertions and the mutation suite carry the load, and this
-section states the gap rather than implying coverage that does not exist.
+the hand-written assertions and the mutation suite carry the load (which catches
+all ten), and this section states the gap rather than implying coverage that does
+not exist.
 
 The golden file header records the rustdl version. A version mismatch is a
 distinct outcome, "re-baseline required", never a silent pass and never a Fail.
@@ -479,8 +493,8 @@ timeout_ms: 30000
 Everything past `id` and `description` is optional, but a case must assert
 *something*: at least one of `entails`, `not_entails`, `entails_manchester`,
 `not_entails_manchester`, `instance_of_expr`, `satisfiable_expr`,
-`unsatisfiable`, or `expect_inconsistent: true`. A manifest with only `id` and
-`description` is rejected (`ManifestError::NoAssertions`), and an `entails:`
+`unsatisfiable`, `cq`, or `expect_inconsistent: true`. A manifest with only `id`
+and `description` is rejected (`ManifestError::NoAssertions`), and an `entails:`
 block that parses to zero triples (empty, or only comments) is reported as
 `Indeterminate`. Both are the same failure `deny_unknown_fields` guards against,
 reached from a different direction: a case that asserts nothing otherwise
@@ -559,13 +573,57 @@ rules are:
   a thing the harness exists to catch.
 - Rows are compared as a multiset, so duplicate rows are significant. `ordered:
   true` compares as a sequence instead, and is only valid with an `ORDER BY` in
-  the query.
+  the query. That last clause is enforced, not merely stated: `cq::check_cq`
+  reports `Indeterminate` for `ordered: true` over a query with no `ORDER BY`,
+  because SPARQL leaves the row order arbitrary there and the comparison would
+  be a coin flip reported as a verdict.
 - `exact: true` requires set equality. `exact: false` requires every expected row
   to be present, extra rows allowed. Never the reverse.
 - A variable expected to be unbound is written `null`. A row whose variable is
   unbound in the result matches only `null`.
 - Blank nodes never compare equal across runs and are a configuration error in
   `expect_rows`. Suite data uses skolemised IRIs instead (section 9).
+- An expected row must name **every** variable the query projects. Rows compare
+  as whole maps, and an actual row always carries one key per projected variable
+  (bound, or explicitly unbound), so a row that omits one can never match. An
+  absent key is not "not compared"; it is a row that cannot match.
+
+Two `cq` configurations are refused by `load_case` as `ManifestError` variants
+(exit code 2, a configuration error), not run and reported as a check:
+
+- `ordered: true` with `exact: false`. The rules above do not say whether an
+  unmatched actual row may appear before, between, or only after the expected
+  sequence, so the combination is undefined rather than silently given one of
+  its two equally licensed readings. Use `ordered: true, exact: true` for an
+  exact sequence, or `ordered: false, exact: false` for an unordered subset.
+- An empty `expect_rows` with `exact: false`. Every expected row is trivially
+  accounted for and extra actual rows are tolerated, so the check passes
+  whatever the query returns: a check that cannot fail, which is
+  `ManifestError::NoAssertions` reached one level in. An empty `expect_rows`
+  with `exact: true` is the legitimate "this query must return nothing"
+  assertion and is accepted.
+
+Both are decidable from the manifest alone, which is why they are refused at
+load rather than routed to `Indeterminate` at check time: `Indeterminate`
+(exit 3) means the reasoner could not answer, and rejecting at load catches the
+mistake even when the ontology itself fails to load. The `cq` situations that DO
+yield `Indeterminate` all require the `.rq` file to be read or the query to be
+run. `cq::check_cq` has eight of them: an unreadable query file, a parse failure,
+an execution failure, an `ASK`, a `CONSTRUCT`/`DESCRIBE`, a failure part-way
+through the result stream, `ordered: true` over a query with no `ORDER BY`, and
+an `expect_rows` token the term parser rejects. A ninth is raised by
+`suite::run_case` rather than by `check_cq`: a materialisation failure, reported
+once per `cq` entry, because the store the questions would have been asked
+against was never built. This list was previously written as a closed count of
+four while the code had seven exits; enumerate it, and keep it in step with the
+`indeterminate` call sites, which are the ground truth.
+
+`ordered: true` without an `ORDER BY` belongs on that list and not at load time,
+and it is the case that shows the load-versus-check split is a real distinction
+rather than a convention: the manifest does not contain the query text, so no
+load-time guard could see it. The reverse holds for `ordered: true` with
+`exact: false`, which is settled by two booleans in the manifest and would be
+unreachable if it were also guarded here.
 
 ## 8. Execution pipeline
 

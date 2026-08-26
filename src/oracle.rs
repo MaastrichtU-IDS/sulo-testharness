@@ -205,6 +205,18 @@ pub const REASONER_DEADLINE: Duration = Duration::from_secs(15);
 /// `GATE_*` constants do for the gate's check names.
 pub const NO_PROOF_MARKER: &str = "no proof was found";
 
+// Every `CheckOutcome` this module builds sets
+// `rests_on_absence: false`, on purpose and not by omission. This
+// module's absence-resting outcomes are already identified by
+// `NO_PROOF_MARKER` above (a positive Fail) or by the
+// `UnrefutedPass` verdict itself (a negative expectation), both of
+// which `suite::downgrade_for_loss` matches structurally. The flag is
+// for check kinds those two signals cannot see, which today means
+// only the competency-question path; see
+// `verdict::CheckOutcome::rests_on_absence`. Setting it `true` here
+// as well would double-cover the same outcomes and make the two
+// structural matches above dead code.
+
 /// What the case says should happen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Expectation {
@@ -834,7 +846,11 @@ pub fn check(
         Ok(held) => verdict_for(held, expect, &name),
     };
 
-    CheckOutcome { name, verdict }
+    CheckOutcome {
+        name,
+        verdict,
+        rests_on_absence: false,
+    }
 }
 
 /// Is `sub_expr` subsumed by `sup_expr`? Reduced to the standard OWL
@@ -858,6 +874,7 @@ pub fn check_subsumption_expr(
             return CheckOutcome {
                 name: what,
                 verdict: Verdict::Indeterminate(IndeterminateReason::OracleError(e.to_string())),
+                rests_on_absence: false,
             };
         }
     };
@@ -866,6 +883,7 @@ pub fn check_subsumption_expr(
         return CheckOutcome {
             name: what,
             verdict: Verdict::Indeterminate(IndeterminateReason::OracleError(msg)),
+            rests_on_absence: false,
         };
     }
 
@@ -885,6 +903,7 @@ pub fn check_subsumption_expr(
     CheckOutcome {
         name: what,
         verdict,
+        rests_on_absence: false,
     }
 }
 
@@ -908,6 +927,7 @@ pub fn check_instance_expr(
             return CheckOutcome {
                 name: what,
                 verdict: Verdict::Indeterminate(IndeterminateReason::OracleError(e.to_string())),
+                rests_on_absence: false,
             };
         }
     };
@@ -916,6 +936,7 @@ pub fn check_instance_expr(
         return CheckOutcome {
             name: what,
             verdict: Verdict::Indeterminate(IndeterminateReason::OracleError(msg)),
+            rests_on_absence: false,
         };
     }
 
@@ -930,6 +951,7 @@ pub fn check_instance_expr(
     CheckOutcome {
         name: what,
         verdict,
+        rests_on_absence: false,
     }
 }
 
@@ -981,6 +1003,7 @@ pub fn check_satisfiable_expr(
             return CheckOutcome {
                 name: what,
                 verdict: Verdict::Indeterminate(IndeterminateReason::OracleError(e.to_string())),
+                rests_on_absence: false,
             };
         }
     };
@@ -989,6 +1012,7 @@ pub fn check_satisfiable_expr(
         return CheckOutcome {
             name: what,
             verdict: Verdict::Indeterminate(IndeterminateReason::OracleError(msg)),
+            rests_on_absence: false,
         };
     }
 
@@ -1013,6 +1037,7 @@ pub fn check_satisfiable_expr(
     CheckOutcome {
         name: what,
         verdict,
+        rests_on_absence: false,
     }
 }
 

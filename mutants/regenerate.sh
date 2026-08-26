@@ -213,4 +213,24 @@ out = out.replace(needle_range, '    rdfs:domain sulo:Object .', 1)
 open(out_path, 'w').write(out)
 PY
 
-echo "regenerated: no-role-chain.ttl, no-transitive-parthood.ttl, no-feature-union.ttl, no-subproperty-containment.ttl, no-feature-object.ttl, no-selfpart-feature-and-informationobject.ttl, no-selfpart-process.ttl, no-quantity-unit-somevaluesfrom.ttl, no-participant-domain-and-inverse-range.ttl"
+# 10. Delete sulo:Object's `owl:disjointWith sulo:Process`, the only
+#     axiom in sulo.ttl stating Object/Process disjointness (it is not
+#     a member of either owl:AllDisjointClasses list, and not a
+#     disjointUnionOf). Verified NOT re-derived by Object's own
+#     `complementOf (hasPart some Process)` restriction plus hasPart
+#     reflexivity: the pinned reasoner reports the mutant CONSISTENT
+#     for an individual typed both Object and Process, so this single
+#     deletion is effective (empirical trace in mutants/README.md).
+#     Catches taxonomy/disjoint-object-process, the first committed
+#     mutant coverage for the taxonomy group's 14 disjointness
+#     counter-examples.
+python3 - "$SULO" "$MUTANTS/no-object-process-disjoint.ttl" <<'PYX'
+import sys
+src_path, out_path = sys.argv[1], sys.argv[2]
+src = open(src_path).read()
+needle = '    owl:disjointWith sulo:Process ;\n'
+assert src.count(needle) == 1, f"expected exactly 1 occurrence in {src_path}, found {src.count(needle)}"
+open(out_path, 'w').write(src.replace(needle, '', 1))
+PYX
+
+echo "regenerated: no-role-chain.ttl, no-transitive-parthood.ttl, no-feature-union.ttl, no-subproperty-containment.ttl, no-feature-object.ttl, no-selfpart-feature-and-informationobject.ttl, no-selfpart-process.ttl, no-quantity-unit-somevaluesfrom.ttl, no-participant-domain-and-inverse-range.ttl, no-object-process-disjoint.ttl"

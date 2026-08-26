@@ -274,3 +274,224 @@ fn a_construct_query_is_rejected_with_a_clear_message() {
         other => panic!("expected Indeterminate, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------
+// `CheckOutcome::rests_on_absence`: which competency-question
+// outcomes declare that their meaning depends on a row being ABSENT
+// from the materialised store, and are therefore downgraded by
+// `suite::downgrade_for_loss`. `check_cq` is the only place in the
+// crate that computes this flag from anything other than a literal
+// `false`, so the tests below are what stop it silently becoming a
+// constant: one per disjunct that sets it (Fail, `exact: true`, a
+// null cell, a non-monotone query) and one for the single
+// combination that must leave it clear.
+// ---------------------------------------------------------------
+
+#[test]
+fn a_cq_fail_declares_that_it_rests_on_absence() {
+    // A Fail is always "this expected row was not there", which a
+    // dropped axiom can produce just as well as an ontology
+    // regression can. It carries no `oracle::NO_PROOF_MARKER`, so the
+    // flag is the only signal `downgrade_for_loss` has.
+    let store = parts_store();
+    let s = spec(
+        "queries/parts_of_a.rq",
+        vec![row(&[("o", "ex:zzz")])],
+        false,
+        false,
+    );
+    let out = check_cq(&store, &s, Path::new(FIXTURES), &pm());
+    assert!(matches!(out.verdict, Verdict::Fail(_)), "got {out:?}");
+    assert!(
+        out.rests_on_absence,
+        "a CQ Fail rests on a row's absence and must say so"
+    );
+}
+
+#[test]
+fn an_exact_cq_pass_declares_that_it_rests_on_absence() {
+    // `exact: true` asserts "and no other rows", which is an absence
+    // claim: under axiom loss the closure is a subset of the intended
+    // one, so a suppressed extra row makes it pass unearned.
+    let store = parts_store();
+    let s = spec(
+        "queries/parts_of_a.rq",
+        vec![
+            row(&[("o", "ex:a")]),
+            row(&[("o", "ex:b")]),
+            row(&[("o", "ex:c")]),
+        ],
+        true,
+        false,
+    );
+    let out = check_cq(&store, &s, Path::new(FIXTURES), &pm());
+    assert_eq!(out.verdict, Verdict::Pass, "got {out:?}");
+    assert!(
+        out.rests_on_absence,
+        "exact: true is an absence claim and must say so"
+    );
+}
+
+#[test]
+fn a_cq_pass_with_a_null_cell_declares_that_it_rests_on_absence() {
+    // A `null` cell asserts "this variable is unbound", which is
+    // again an absence claim: a binding the reasoner would have
+    // inferred from a dropped axiom would have refuted it.
+    //
+    // The query is the UNION one, not the OPTIONAL one this test used
+    // before `query_is_monotone` existed. OPTIONAL is on the
+    // non-monotone keyword list, so over that query the flag would be
+    // set by TWO disjuncts at once and this test could no longer fail
+    // if the null-cell disjunct were deleted: a check that cannot
+    // fail, introduced by the very change that added the third
+    // disjunct. The UNION query is monotone and still projects an
+    // unbound cell, so the null cell is the only reason left.
+    let store = parts_store();
+    let s = spec(
+        "queries/parts_of_a_union_label.rq",
+        vec![
+            row_opt(&[("o", Some("ex:a")), ("label", None)]),
+            row_opt(&[("o", Some("ex:b")), ("label", None)]),
+        ],
+        false,
+        false,
+    );
+    let out = check_cq(&store, &s, Path::new(FIXTURES), &pm());
+    assert_eq!(out.verdict, Verdict::Pass, "got {out:?}");
+    assert!(
+        out.rests_on_absence,
+        "a null cell is an unboundedness claim and must say so"
+    );
+}
+
+#[test]
+fn a_subset_cq_pass_over_a_monotone_query_with_every_cell_bound_is_not_flagged() {
+    // The polarity that must NOT be flagged: `exact: false` with no
+    // null cell asserts only that certain rows are PRESENT, and over
+    // a MONOTONE query (this one is a single basic graph pattern:
+    // no window, no aggregate, no negation) a smaller store can only
+    // remove rows. Flagging it would downgrade a trustworthy Pass to
+    // Indeterminate for no reason, which overstates the harness's
+    // uncertainty in the other direction.
+    //
+    // The name of this test used to be the claim itself
+    // ("..._is_monotone_safe"), stated for every query rather than
+    // for a monotone one; the two tests below are the cases that
+    // claim was false for.
+    let store = parts_store();
+    let s = spec(
+        "queries/parts_of_a.rq",
+        vec![row(&[("o", "ex:b")])],
+        false,
+        false,
+    );
+    let out = check_cq(&store, &s, Path::new(FIXTURES), &pm());
+    assert_eq!(out.verdict, Verdict::Pass, "got {out:?}");
+    assert!(
+        !out.rests_on_absence,
+        "a subset Pass with every cell bound over a monotone query must not be flagged"
+    );
+}
+
+#[test]
+fn a_subset_cq_pass_over_a_limit_query_declares_that_it_rests_on_absence() {
+    // Same spec shape as the test above, `exact: false` with every
+    // cell bound, over a query with ORDER BY + LIMIT. Loss does not
+    // merely remove rows here: dropping ex:a would promote ex:c into
+    // the two-row window, so this Pass could be MANUFACTURED by loss
+    // and must declare itself.
+    let store = parts_store();
+    let s = spec(
+        "queries/parts_of_a_limit.rq",
+        vec![row(&[("o", "ex:a")])],
+        false,
+        false,
+    );
+    let out = check_cq(&store, &s, Path::new(FIXTURES), &pm());
+    assert_eq!(out.verdict, Verdict::Pass, "got {out:?}");
+    assert!(
+        out.rests_on_absence,
+        "a LIMIT query is non-monotone: a smaller store can promote a row into \
+         the window, so this Pass must declare that it rests on absence"
+    );
+}
+
+#[test]
+fn a_subset_cq_pass_over_an_aggregate_query_declares_that_it_rests_on_absence() {
+    // The second non-monotone mechanism: COUNT emits a row whatever
+    // the store holds, so loss changes the VALUE rather than removing
+    // the row, and an expected count can be hit by losing an axiom
+    // just as well as by the ontology being right.
+    let store = parts_store();
+    let s = spec(
+        "queries/parts_of_a_count.rq",
+        vec![row(&[("n", "\"3\"^^xsd:integer")])],
+        false,
+        false,
+    );
+    let out = check_cq(&store, &s, Path::new(FIXTURES), &pm());
+    assert_eq!(out.verdict, Verdict::Pass, "got {out:?}");
+    assert!(
+        out.rests_on_absence,
+        "an aggregate query is non-monotone: loss changes the aggregated value, \
+         so this Pass must declare that it rests on absence"
+    );
+}
+
+// ---------------------------------------------------------------
+// Spec 7.3: `ordered: true` is only valid with an `ORDER BY` in the
+// query. Not decidable from the manifest (the manifest does not hold
+// the query text), so it is `check_cq`'s job, not `load_case`'s.
+// ---------------------------------------------------------------
+
+#[test]
+fn ordered_true_over_a_query_without_order_by_is_indeterminate() {
+    // Without ORDER BY, SPARQL leaves the row order arbitrary, so
+    // whether the sequence comparison passes is a coin flip. Refuse
+    // to report a verdict rather than report a flaky one.
+    let store = parts_store();
+    let s = spec(
+        "queries/parts_of_a.rq",
+        vec![
+            row(&[("o", "ex:a")]),
+            row(&[("o", "ex:b")]),
+            row(&[("o", "ex:c")]),
+        ],
+        true,
+        true,
+    );
+    let out = check_cq(&store, &s, Path::new(FIXTURES), &pm());
+    match out.verdict {
+        Verdict::Indeterminate(reason) => {
+            let msg = format!("{reason:?}");
+            assert!(
+                msg.contains("no ORDER BY") && msg.contains("ordered: true"),
+                "message should name the missing ORDER BY and the setting that \
+                 needs it, got: {msg}"
+            );
+        }
+        other => panic!("expected Indeterminate, got {other:?}"),
+    }
+}
+
+#[test]
+fn ordered_true_over_a_query_with_order_by_is_compared_normally() {
+    // The other direction, or the guard above could be a check that
+    // always fires: the same `ordered: true` spec over a query that
+    // does have ORDER BY reaches the comparison and gets a real
+    // verdict. `parts_of_a_desc.rq` sorts descending, so this is the
+    // reverse of the row order above.
+    let store = parts_store();
+    let s = spec(
+        "queries/parts_of_a_desc.rq",
+        vec![
+            row(&[("o", "ex:c")]),
+            row(&[("o", "ex:b")]),
+            row(&[("o", "ex:a")]),
+        ],
+        true,
+        true,
+    );
+    let out = check_cq(&store, &s, Path::new(FIXTURES), &pm());
+    assert_eq!(out.verdict, Verdict::Pass, "got {out:?}");
+}

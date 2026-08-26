@@ -20,8 +20,11 @@ use crate::prefixes::{self, PrefixError};
 /// requirement that the variable be unbound in that row.
 ///
 /// `Unbound` is deliberately distinct from the key being absent from the
-/// row map: the former asserts unboundedness, the latter declines to
-/// compare the variable at all.
+/// row map: the former asserts unboundedness, the latter yields a row
+/// that can never match. An expected row must name EVERY variable the
+/// query projects, because [`compare`] compares whole rows by
+/// `BTreeMap` equality and an actual row always carries one key per
+/// projected variable; see [`compare`]'s own doc comment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expected {
     Bound(Term),
@@ -145,6 +148,24 @@ fn parse_literal(t: &str, pm: &PrefixMapping) -> Result<Term, RowError> {
 /// configuration error rather than a silently picked reading. Use
 /// `ordered: true, exact: true` for an exact sequence, or `ordered: false,
 /// exact: false` for an unordered subset.
+///
+/// That guard is DEFENCE-IN-DEPTH, not the primary one, and it is not
+/// dead code. `manifest::load_case` rejects the same combination as a
+/// `ManifestError` before any ontology is loaded, so no manifest-driven
+/// run can reach it; it stays here for direct library callers, which
+/// construct `expected`/`actual` themselves and never pass through a
+/// manifest, and it has its own test
+/// (`tests/rows.rs::ordered_true_with_exact_false_is_a_configuration_error`)
+/// that calls it directly. That reference is a path and a name, so a rename
+/// orphans it silently; it is kept as a pointer rather than made robust
+/// because nothing here can enforce it, and the test is findable by what it
+/// calls rather than by what it is named (`grep -rn ', false, true)'
+/// tests/rows.rs`, the one call site passing this combination) even after
+/// one. Note the asymmetry with the OTHER manifest-level
+/// `cq` guard: an empty `expected` with `exact: false` is a perfectly
+/// meaningful request of this function ("check nothing"), so it is refused
+/// at the manifest layer only, where "a case that asserts nothing" is the
+/// thing being refused.
 ///
 /// When `ordered` (and therefore also `exact`, per the above), expected
 /// row `i` must equal actual row `i`, in order; a missing position is an

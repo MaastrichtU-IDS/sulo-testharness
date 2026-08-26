@@ -4,6 +4,7 @@ fn outcome(name: &str, v: Verdict) -> CheckOutcome {
     CheckOutcome {
         name: name.to_string(),
         verdict: v,
+        rests_on_absence: false,
     }
 }
 

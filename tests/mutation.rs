@@ -21,18 +21,18 @@
 //! not a copy of it.
 //!
 //! `mutants_are_not_stale_against_current_sulo`, below, is a second,
-//! independent kind of test from the four `assert_caught` tests: it
+//! independent kind of test from the `assert_caught` tests: it
 //! does not run the reasoner at all. It re-derives, in Rust, exactly
 //! what each mutant should be from whatever `../sulo/sulo.ttl`
 //! currently contains, and compares byte-for-byte against the
 //! committed mutant file. Without it, a SULO edit could go
 //! unreflected in the mutant files forever: `assert_caught`'s "clean"
 //! half would read the new ontology while its "mutant" half kept
-//! reading the old, frozen one, so all four tests could stay green
+//! reading the old, frozen one, so every one of them could stay green
 //! while proving nothing about the CURRENT ontology, the exact
 //! "green while testing nothing" failure this whole file exists to
 //! rule out, reintroduced one level up. `mutants/regenerate.sh`
-//! performs the same four edits from the shell/Python side, so a
+//! performs the same edits from the shell/Python side, so a
 //! SULO bump is one command; this test is what makes forgetting to
 //! run it a build failure instead of a silent gap.
 
@@ -73,11 +73,14 @@ fn assert_caught(mutant: &str, case_file: &str) {
     assert_eq!(
         clean,
         Verdict::Pass,
-        "{case_file} must pass on clean SULO with a TRUSTWORTHY Pass. All four
-         proof cases assert positive entailments only, so an UnrefutedPass here
-         would itself be the defect: it would mean the proof this mutant is
-         supposed to break was never found in the first place, and the mutant's
-         Fail below would be proving nothing."
+        "{case_file} must pass on clean SULO with a TRUSTWORTHY Pass. Every case
+         this helper is invoked for asserts something POSITIVE (an entailment, a
+         competency-question row, or an expected inconsistency), never a negative
+         expectation, so an UnrefutedPass here would itself be the defect: it
+         would mean the proof this mutant is supposed to break was never found in
+         the first place, and the mutant's Fail below would be proving nothing.
+         Do not relax this to `Pass | UnrefutedPass` to make a new (mutant, case)
+         pair go green; pick a case that proves something instead."
     );
 
     let mutated = verdict_of(case_file, &mutant_path);
@@ -174,6 +177,46 @@ fn deleting_the_role_chain_also_breaks_the_new_pro_cases() {
     assert_caught(
         "no-role-chain.ttl",
         "suites/sulo/patterns/pro/pattern-membership.yaml",
+    );
+    // The flagship competency question, and the spec's own worked
+    // example of the `cq` schema. Its query asks for the encounter's
+    // participants joined against their NCBITaxon typing, which is
+    // reachable only through the role chain, so deleting the chain
+    // suppresses the ex:alice row. Observed on the mutant:
+    // Fail("missing expected row: {?p = <http://example.org/alice>}").
+    // Added because the CQ path is what this branch delivers and,
+    // before this, only patterns/solid/value-quality-unit of the
+    // suite's two competency questions was mutation-proven.
+    assert_caught(
+        "no-role-chain.ttl",
+        "suites/sulo/patterns/pro/who-participated.yaml",
+    );
+}
+
+#[test]
+fn deleting_object_process_disjointness_breaks_the_taxonomy_counter_example() {
+    // The taxonomy group's 14 disjointness counter-examples had ZERO
+    // committed mutant coverage before this: they were flip-verified
+    // during design with scratch mutants that were deleted before
+    // commit, so that verification was neither repeatable nor in CI,
+    // and the one taxonomy mutant that did exist
+    // (`no-feature-union.ttl`) asserts they must NOT react. This is
+    // the first mutant that makes one of them react.
+    //
+    // `no-object-process-disjoint.ttl` deletes sulo:Object's
+    // `owl:disjointWith sulo:Process`, which is the whole of the
+    // Object/Process disjointness in sulo.ttl: the two
+    // owl:AllDisjointClasses lists cover {Capability,
+    // InformationObject, Quality, Role} and {Duration, TimeInstant,
+    // TimeInterval}, neither of which mentions Object or Process, and
+    // no disjointUnionOf covers the pair either. Unlike the four
+    // paired-removal mutants, one deletion suffices here, verified
+    // empirically rather than assumed: see mutants/README.md for why
+    // Object's own `complementOf (hasPart some Process)` restriction
+    // does not re-entail it under the pinned reasoner.
+    assert_caught(
+        "no-object-process-disjoint.ttl",
+        "suites/sulo/taxonomy/disjoint-object-process.yaml",
     );
 }
 
@@ -327,7 +370,7 @@ fn deleting_hasparticipants_domain_and_isparticipantins_inverse_range_breaks_bot
 // ---------------------------------------------------------------
 // Staleness guard (fix round 2, IMPORTANT 3): each mutant must equal
 // CURRENT clean SULO with exactly its documented edit applied. These
-// functions independently re-derive, in Rust, the same four edits
+// functions independently re-derive, in Rust, the same edits
 // mutants/regenerate.sh performs in Python/shell, so drift between
 // "what the mutant file contains" and "what today's SULO plus one
 // edit would produce" is a test failure, not a silent gap.
@@ -483,6 +526,17 @@ fn expected_no_participant_domain_and_inverse_range(sulo: &str) -> String {
     out.replacen(needle_range, "    rdfs:domain sulo:Object .", 1)
 }
 
+fn expected_no_object_process_disjoint(sulo: &str) -> String {
+    let needle = "    owl:disjointWith sulo:Process ;\n";
+    assert_eq!(
+        sulo.matches(needle).count(),
+        1,
+        "Object's owl:disjointWith sulo:Process line not found exactly once in current SULO; \
+         mutants/regenerate.sh and this staleness check both need updating"
+    );
+    sulo.replacen(needle, "", 1)
+}
+
 /// (mutant file name, function that derives its expected content from
 /// current SULO).
 type StalenessCase = (&'static str, fn(&str) -> String);
@@ -491,7 +545,7 @@ type StalenessCase = (&'static str, fn(&str) -> String);
 fn mutants_are_not_stale_against_current_sulo() {
     let sulo = std::fs::read_to_string(clean_sulo()).expect("real SULO should be readable");
 
-    let cases: [StalenessCase; 9] = [
+    let cases: [StalenessCase; 10] = [
         ("no-role-chain.ttl", expected_no_role_chain),
         (
             "no-transitive-parthood.ttl",
@@ -515,6 +569,10 @@ fn mutants_are_not_stale_against_current_sulo() {
         (
             "no-participant-domain-and-inverse-range.ttl",
             expected_no_participant_domain_and_inverse_range,
+        ),
+        (
+            "no-object-process-disjoint.ttl",
+            expected_no_object_process_disjoint,
         ),
     ];
 

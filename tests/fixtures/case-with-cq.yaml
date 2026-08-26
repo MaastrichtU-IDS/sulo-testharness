@@ -1,5 +1,18 @@
 id: cq-shape
-description: Exercises every corner of the cq schema.
+description: >-
+  Exercises every corner of the cq schema that a manifest may legally
+  hold: defaulted exact/ordered, a non-default ordered: true (with both
+  the exact: true and, at check time, the ORDER BY it requires), a
+  null cell meaning expected-unbound, a
+  non-default exact: false, and a typed literal. The two combinations
+  load_case refuses (ordered: true with exact: false, and an empty
+  expect_rows with exact: false) are deliberately absent: they belong
+  in their own rejection fixtures, not in the one worked example of a
+  valid cq block.
+
+  The query paths below are illustrative and deliberately absent from
+  tests/fixtures/queries: nothing runs this case, only load_case reads
+  it, and manifest loading never opens a .rq. Do not copy the paths.
 data: data/parts.ttl
 prefixes:
   ex: http://example.org/
@@ -12,5 +25,10 @@ cq:
     expect_rows:
       - { v: '"37.8"^^xsd:double', unit: "ex:celsius" }
       - { v: '"unbound-case"', unit: null }
-    exact: false
+    exact: true
     ordered: true
+  - query: queries/some-values.rq
+    expect_rows:
+      - { v: '"37.8"^^xsd:double', unit: "ex:celsius" }
+    exact: false
+    ordered: false

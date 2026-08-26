@@ -15,7 +15,11 @@
 //!    Fail (the gate failed to find the clash it expected), and a
 //!    "consistent" verdict from the gate (the gate found no clash at
 //!    all). Leaving the last three trusted is how a dropped axiom
-//!    becomes a green build.
+//!    becomes a green build. The competency-question path adds
+//!    further absence-resting outcomes that neither the verdict text
+//!    nor the check name can identify, so those declare themselves
+//!    via `CheckOutcome::rests_on_absence` instead; see
+//!    `downgrade_for_loss` and `cq::check_cq`.
 
 use std::path::Path;
 use std::time::Duration;
@@ -64,16 +68,29 @@ pub struct CaseResult {
     pub baseline_loss: Vec<String>,
 }
 
-/// Downgrade the verdicts that rest on an absence of proof, across
-/// ALL FOUR shapes that can carry one: an ordinary positive Fail
-/// ("no proof was found"), an ordinary negative UnrefutedPass, the
-/// gate's Fail when it expected inconsistency but found none, and the
-/// gate's Pass when it found the ontology consistent. A trustworthy
-/// positive Pass, a trustworthy negative Fail, and the gate's
-/// trustworthy "found inconsistent" outcomes (in either expectation)
-/// are left untouched: each rests on a clash or entailment actually
-/// found, which loss (a strict subset of the intended axioms) cannot
-/// manufacture out of nothing.
+/// Downgrade the verdicts that rest on an absence of proof.
+///
+/// FOUR of the shapes are recognised structurally, from the verdict
+/// text or the gate's own check name: an ordinary positive Fail ("no
+/// proof was found"), an ordinary negative UnrefutedPass, the gate's
+/// Fail when it expected inconsistency but found none, and the gate's
+/// Pass when it found the ontology consistent. A FIFTH route exists
+/// for check kinds those two structural signals cannot see, and
+/// declares itself through `CheckOutcome::rests_on_absence`; the
+/// competency-question path is the only current user (see
+/// `cq::check_cq`). A trustworthy positive Pass, a trustworthy
+/// negative Fail, and the gate's trustworthy "found inconsistent"
+/// outcomes (in either expectation) are left untouched: each rests on
+/// a clash or entailment actually found, which loss (a strict subset
+/// of the intended axioms) cannot manufacture out of nothing.
+///
+/// Reachability, stated honestly: SULO's only current loss is the two
+/// data-range axioms `load.rs` routes to `baseline_loss`, which is
+/// never passed to this function, so no case in this repository
+/// reaches any branch below today. The `rests_on_absence` route in
+/// particular is a LATENT hole, closed against a future
+/// `data:`/`imports:` file carrying an axiom horned-owl cannot
+/// convert, not a bug observable on the suite as it stands.
 pub fn downgrade_for_loss(outcomes: &mut [CheckOutcome], loss: &[String]) {
     if loss.is_empty() {
         return;
@@ -81,6 +98,12 @@ pub fn downgrade_for_loss(outcomes: &mut [CheckOutcome], loss: &[String]) {
     let reason = loss.join("; ");
 
     for out in outcomes.iter_mut() {
+        // The self-declared route, checked first because it is the
+        // one the two structural signals below cannot express.
+        if out.rests_on_absence {
+            out.verdict = Verdict::Indeterminate(IndeterminateReason::AxiomLoss(reason.clone()));
+            continue;
+        }
         let untrusted = match (out.name.as_str(), &out.verdict) {
             // Rests on "no proof found".
             (_, Verdict::UnrefutedPass) => true,
@@ -211,6 +234,7 @@ pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
         (true, false) => CheckOutcome {
             name: GATE_EXPECT_INCONSISTENT.into(),
             verdict: Verdict::Pass,
+            rests_on_absence: false,
         },
         (true, true) => CheckOutcome {
             name: GATE_EXPECT_INCONSISTENT.into(),
@@ -221,6 +245,7 @@ pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
                  an axiom may have stopped biting. The CI differential settles it."
                     .into(),
             ),
+            rests_on_absence: false,
         },
         (false, false) => CheckOutcome {
             name: GATE_EXPECT_CONSISTENT.into(),
@@ -229,10 +254,12 @@ pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
                  below would pass vacuously. Remaining checks skipped."
                     .into(),
             ),
+            rests_on_absence: false,
         },
         (false, true) => CheckOutcome {
             name: GATE_EXPECT_CONSISTENT.into(),
             verdict: Verdict::Pass,
+            rests_on_absence: false,
         },
     };
 
@@ -278,6 +305,7 @@ pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
                             Expectation::NotEntailed => "not_entails",
                         }
                     ))),
+                    rests_on_absence: false,
                 }),
                 Ok(claims) => {
                     for claim in &claims {
@@ -289,6 +317,7 @@ pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
                     verdict: Verdict::Indeterminate(IndeterminateReason::OracleError(
                         e.to_string(),
                     )),
+                    rests_on_absence: false,
                 }),
             }
         }
@@ -334,6 +363,7 @@ pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
             Err(e) => checks.push(CheckOutcome {
                 name: format!("instance_of_expr individual: {}", i.individual),
                 verdict: Verdict::Indeterminate(IndeterminateReason::OracleError(e.to_string())),
+                rests_on_absence: false,
             }),
         }
     }
@@ -360,6 +390,7 @@ pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
             Err(e) => checks.push(CheckOutcome {
                 name: format!("unsatisfiable: {class}"),
                 verdict: Verdict::Indeterminate(IndeterminateReason::OracleError(e.to_string())),
+                rests_on_absence: false,
             }),
         }
     }
@@ -392,6 +423,7 @@ pub fn run_case(case: &Case, default_ontology: &Path) -> CaseResult {
                         verdict: Verdict::Indeterminate(IndeterminateReason::OracleError(
                             msg.clone(),
                         )),
+                        rests_on_absence: false,
                     });
                 }
             }

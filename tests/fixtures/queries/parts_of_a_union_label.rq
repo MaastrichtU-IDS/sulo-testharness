@@ -1,0 +1,18 @@
+# A MONOTONE query that still projects an unbound cell: the left
+# branch of the UNION never binds ?label, and no ex: individual
+# carries an rdfs:label, so every row has ?label unbound. UNION is
+# monotone (each branch is, and loss can only remove rows from
+# either), which is the point: it lets a test isolate the null-cell
+# reason for rests_on_absence from the non-monotone-query reason.
+#
+# Deliberately free of every keyword on cq.rs's
+# NON_MONOTONE_KEYWORDS list, INCLUDING in this comment: that scan
+# reads the raw query text, comments and all, so naming a keyword
+# here would set the flag and leave the test unable to fail.
+PREFIX sulo: <https://w3id.org/sulo/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+SELECT ?o ?label WHERE {
+  { <http://example.org/a> sulo:isPartOf ?o }
+  UNION
+  { <http://example.org/a> sulo:isPartOf ?o . ?o rdfs:label ?label }
+}
