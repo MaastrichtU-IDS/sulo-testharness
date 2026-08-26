@@ -320,3 +320,154 @@ fn a_discovery_error_is_a_configuration_error() {
         "a suite with no cases must be refused, got: {msg}"
     );
 }
+
+// ---------------------------------------------------------------
+// Deferral: the three modes, and the guard that stops deferral from
+// becoming a way to run nothing and report a pass.
+//
+// `run_with` existed for these from the start and had exactly one
+// caller, always with `Skip`. A review proved the gap by mutation:
+// `DeferredCases::Only => true` (Only silently behaving as Include)
+// and disabling the all-deferred guard outright both survived the
+// entire test suite. A mode nothing exercises is a mode that cannot
+// fail.
+// ---------------------------------------------------------------
+
+const DEFERRED_FAIL_CASE: &str = "\
+id: deferred-fail
+description: Tagged oracle-hermit, and would FAIL if it ever ran.
+prefixes:
+  ex: http://example.org/
+tags: [oracle-hermit]
+entails: |
+  ex:A rdfs:subClassOf ex:B .
+";
+
+/// The default names and counts the tagged case, does not run it, and
+/// lets the untagged cases alone decide the verdict.
+///
+/// The tagged fixture is one that WOULD fail, so if deferral ever
+/// stopped working this test goes red rather than quietly passing on a
+/// case that happened to succeed.
+#[test]
+fn skip_defers_the_tagged_case_and_keeps_it_out_of_the_verdict() {
+    let dir = suite_dir("defer-skip");
+    let clean = copy_clean(&dir);
+    write_case(&dir, "deferred.yaml", DEFERRED_FAIL_CASE);
+    write_case(&dir, "pass.yaml", PASS_CASE);
+
+    match run_with(&dir, Some(&clean), None, DeferredCases::Skip) {
+        RunOutcome::Ran { results, deferred } => {
+            assert_eq!(results.len(), 1, "only the untagged case should have run");
+            assert_eq!(results[0].id, "pass-last");
+            assert_eq!(
+                aggregate_cases(&results),
+                Verdict::Pass,
+                "a deferred case that would fail must not reach the aggregate"
+            );
+            assert_eq!(
+                deferred.len(),
+                1,
+                "the tagged case must be named, not dropped"
+            );
+            assert_eq!(deferred[0].id, "deferred-fail");
+            assert!(
+                deferred[0].reason.contains("oracle-hermit"),
+                "the reason must say why: {}",
+                deferred[0].reason
+            );
+        }
+        RunOutcome::Config(msg) => panic!("expected a run, got a config error: {msg}"),
+    }
+}
+
+/// `include` runs the tagged case like any other, so it CAN set the
+/// exit code. This is the direction that proves `Skip` is doing real
+/// work rather than the case being harmless.
+#[test]
+fn include_runs_the_tagged_case_and_lets_it_fail_the_run() {
+    let dir = suite_dir("defer-include");
+    let clean = copy_clean(&dir);
+    write_case(&dir, "deferred.yaml", DEFERRED_FAIL_CASE);
+    write_case(&dir, "pass.yaml", PASS_CASE);
+
+    let results = ran(run_with(&dir, Some(&clean), None, DeferredCases::Include));
+    assert_eq!(results.len(), 2, "include must run the tagged case too");
+    assert_eq!(
+        exit_code(&aggregate_cases(&results)),
+        1,
+        "with --deferred include the tagged case sets the exit code like any other"
+    );
+}
+
+/// `only` runs exactly the tagged cases. The untagged ones are
+/// narrowed away like a `--filter`, not listed as deferred.
+#[test]
+fn only_runs_exactly_the_tagged_cases() {
+    let dir = suite_dir("defer-only");
+    let clean = copy_clean(&dir);
+    write_case(&dir, "deferred.yaml", DEFERRED_FAIL_CASE);
+    write_case(&dir, "pass.yaml", PASS_CASE);
+
+    match run_with(&dir, Some(&clean), None, DeferredCases::Only) {
+        RunOutcome::Ran { results, deferred } => {
+            assert_eq!(results.len(), 1, "only the tagged case should have run");
+            assert_eq!(
+                results[0].id, "deferred-fail",
+                "`only` must run the TAGGED case, not merely some single case"
+            );
+            assert!(
+                deferred.is_empty(),
+                "in `only` mode the untagged cases are narrowed away, not reported as deferred"
+            );
+        }
+        RunOutcome::Config(msg) => panic!("expected a run, got a config error: {msg}"),
+    }
+}
+
+/// The third "a run that checks nothing" guard: every selected case is
+/// deferred, so nothing would run, and an empty aggregate is `Pass`.
+#[test]
+fn a_selection_that_is_entirely_deferred_is_a_config_error() {
+    let dir = suite_dir("defer-all");
+    let clean = copy_clean(&dir);
+    write_case(&dir, "deferred.yaml", DEFERRED_FAIL_CASE);
+
+    let msg = config_error(run_with(&dir, Some(&clean), None, DeferredCases::Skip));
+    assert!(
+        msg.contains("deferred by default") && msg.contains("still report a pass"),
+        "a fully deferred selection must be refused, not reported as a green run over \
+         zero cases: {msg}"
+    );
+}
+
+/// The mirror: `only` was asked for and nothing carries the tag.
+#[test]
+fn only_with_no_tagged_case_is_a_config_error() {
+    let dir = suite_dir("defer-only-none");
+    let clean = copy_clean(&dir);
+    write_case(&dir, "pass.yaml", PASS_CASE);
+
+    let msg = config_error(run_with(&dir, Some(&clean), None, DeferredCases::Only));
+    assert!(
+        msg.contains("oracle-hermit") && msg.contains("still report a pass"),
+        "--deferred only with nothing tagged must be refused: {msg}"
+    );
+}
+
+/// Two cases sharing an `id` would appear twice under one name in the
+/// JSON and JUnit reports with no way to tell them apart. Discovery is
+/// by path, so nothing upstream notices.
+#[test]
+fn two_cases_sharing_an_id_are_a_config_error() {
+    let dir = suite_dir("duplicate-id");
+    let clean = copy_clean(&dir);
+    write_case(&dir, "first.yaml", PASS_CASE);
+    write_case(&dir, "second.yaml", PASS_CASE);
+
+    let msg = config_error(run(&dir, Some(&clean), None));
+    assert!(
+        msg.contains("share the id") && msg.contains("pass-last"),
+        "duplicate case ids must be refused and both manifests named: {msg}"
+    );
+}

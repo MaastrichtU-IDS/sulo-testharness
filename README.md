@@ -93,9 +93,23 @@ cargo run -- run --suite suites/sulo --ontology ../sulo/sulo.ttl
 ```
 
 `--format json|junit` for machine consumers, `--filter <substr>` to narrow to a
-group or a single case. A suite root with no cases, a filter matching nothing,
-and a selection every one of whose cases is deferred are all configuration
-errors (exit 2) rather than a green run over nothing.
+group or a single case.
+
+Four ways a run could check nothing, or mislead about what it checked, are
+configuration errors (exit 2) rather than a green run: a suite root with no
+cases, a filter matching nothing, a selection every one of whose cases is
+deferred, and two cases sharing an `id`.
+
+`--deferred include|only` governs the cases tagged `oracle-hermit`, whose
+oracle of record is the HermiT differential rather than the pinned reasoner.
+By default they are named and counted but not run, and cannot set the exit
+code; `only` runs exactly them.
+
+`--allow-indeterminate` exits 0 rather than 3 when the run holds an
+Indeterminate and no Fail (spec 5.4). It can never suppress a Fail, and the
+Indeterminates stay in the report either way. An Indeterminate caused by axiom
+loss means the reasoner saw a weaker ontology than the one that ships, so reach
+for this only when a genuine timeout is blocking you.
 
 Compare the inferred closure against the committed golden file, and re-baseline
 it deliberately after a legitimate change:

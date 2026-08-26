@@ -67,9 +67,9 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
 
-      # Exercise the binary itself, not only the library. Nothing else
-      # in CI runs `main.rs`, its argument parsing, or its exit codes.
       # No --accept-golden: this must COMPARE against the committed
-      # golden file and fail on drift, never rewrite it.
+      # golden file and fail on drift, never rewrite it. (`tests/cli.rs`
+      # now covers `main.rs`, its argument parsing and its exit codes,
+      # so this step is no longer the only thing exercising the binary.)
       - name: Golden closure
         run: cargo run -- golden --ontology ../sulo/sulo.ttl --golden suites/sulo.golden

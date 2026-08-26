@@ -21,6 +21,7 @@
 //!    via `CheckOutcome::rests_on_absence` instead; see
 //!    `downgrade_for_loss` and `cq::check_cq`.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -617,7 +618,7 @@ pub const DEFERRED_TAG: &str = "oracle-hermit";
 
 /// Why a deferred case did not run. One constant, so the text a
 /// consumer reads is the same in every report format.
-pub const DEFERRED_REASON: &str = "tagged `oracle-hermit`: the pinned reasoner provably cannot decide this case, so its oracle of record is the CI differential (spec 5.3), not this run. Not counted toward the exit code. Pass --deferred include or --deferred only to execute it anyway.";
+pub const DEFERRED_REASON: &str = "tagged `oracle-hermit`: the pinned reasoner provably cannot decide this case, so its oracle of record is the CI differential (spec 5.3), which is NOT yet built (phase 7), so this case is currently checked by nothing. Not counted toward the exit code. Pass --deferred include or --deferred only to execute it anyway.";
 
 /// What a run does with the cases carrying [`DEFERRED_TAG`].
 ///
@@ -788,6 +789,28 @@ pub fn run_suite(opts: &RunOptions) -> RunOutcome {
         match load_case(path) {
             Ok(c) => cases.push(c),
             Err(e) => return RunOutcome::Config(e.to_string()),
+        }
+    }
+
+    // Two cases sharing an `id` appear twice under one name in the
+    // JSON `cases` array and the JUnit report, with no way for a
+    // consumer to tell which verdict belongs to which manifest.
+    // Discovery is by path, so nothing upstream catches it. Refused
+    // rather than tolerated, for the same reason the other three
+    // "this run would mislead" conditions are.
+    {
+        let mut seen: BTreeMap<&str, &PathBuf> = BTreeMap::new();
+        for (case, path) in cases.iter().zip(&selected) {
+            if let Some(first) = seen.insert(case.id.as_str(), path) {
+                return RunOutcome::Config(format!(
+                    "two cases share the id {:?} ({} and {}), so a report could not say \
+                     which verdict belongs to which manifest. Case ids must be unique \
+                     within a suite.",
+                    case.id,
+                    first.display(),
+                    path.display()
+                ));
+            }
         }
     }
 

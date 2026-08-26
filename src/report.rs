@@ -258,6 +258,14 @@ fn xml_escape(s: &str) -> String {
 const UNREFUTED_NOTE: &str = "PASS*: a negative expectation the reasoner failed to refute, \
                               not a proof of non-entailment.";
 
+/// Why an `Indeterminate` shows up as a JUnit `<skipped>` even though
+/// the process exits 3. Plan ruling 14: both renderings are honest on
+/// their own, and a consumer reading only the XML would otherwise have
+/// no way to reconcile them.
+const INDETERMINATE_CAVEAT: &str = "NOTE: reported as skipped because JUnit has no state for \
+     \"the reasoner could not answer\"; `<failure>` would claim a regression that was never \
+     found. The run still exits 3 (spec 5.4) unless --allow-indeterminate was passed.";
+
 /// Render results as a JUnit XML report.
 ///
 /// The verdict mapping, and why JUnit's three states have to carry
@@ -311,32 +319,6 @@ pub fn render_junit(results: &[CaseResult], deferred: &[DeferredCase]) -> String
          skipped=\"{skipped}\" errors=\"0\">\n"
     ));
 
-    // Baseline loss goes here, DEDUPLICATED, exactly as `render` puts
-    // it in a preamble rather than on every line. On the real suite
-    // all 66 cases load the same ontology and so carry the same single
-    // message; repeating it per testcase produced 66 identical lines
-    // and buried the per-case notes that actually differ. Per-case
-    // attribution is not lost to a machine consumer: `render_json`
-    // keeps `baseline_loss` on every case (ruling 6).
-    let baseline: BTreeSet<&str> = results
-        .iter()
-        .flat_map(|r| r.baseline_loss.iter().map(String::as_str))
-        .collect();
-    if !baseline.is_empty() {
-        let mut note = String::from(
-            "known baseline loss (pinned-reasoner limitation, not an ontology defect, \
-             did not affect any verdict below):",
-        );
-        for b in &baseline {
-            note.push_str("\n  ");
-            note.push_str(b);
-        }
-        out.push_str(&format!(
-            "    <system-out>{}</system-out>\n",
-            xml_escape(&note)
-        ));
-    }
-
     for r in results {
         let name = match r.verdict {
             Verdict::UnrefutedPass => format!("{} [unrefuted]", r.id),
@@ -357,8 +339,22 @@ pub fn render_junit(results: &[CaseResult], deferred: &[DeferredCase]) -> String
             Verdict::Indeterminate(_) => {
                 // `verdict_message` rather than a local string, so the
                 // JSON and JUnit explanations cannot drift apart.
-                let e = xml_escape(&verdict_message(&r.verdict).unwrap_or_default());
-                out.push_str(&format!("      <skipped message=\"{e}\"/>\n"));
+                //
+                // The caveat is not decoration. JUnit has no fifth
+                // state, so an Indeterminate renders as `<skipped>`
+                // while the process still exits 3: a consumer sees a
+                // failing job whose report shows skips rather than
+                // failures, and nothing else in the file explains why.
+                // Emitted as an element BODY as well as an attribute,
+                // because attribute-value normalisation collapses the
+                // newlines of a multi-line reason and, unlike `Fail`,
+                // there would otherwise be no surviving copy.
+                let full = format!(
+                    "{}\n{INDETERMINATE_CAVEAT}",
+                    verdict_message(&r.verdict).unwrap_or_default()
+                );
+                let e = xml_escape(&full);
+                out.push_str(&format!("      <skipped message=\"{e}\">{e}</skipped>\n"));
             }
             Verdict::Pass | Verdict::UnrefutedPass => {}
         }
@@ -396,6 +392,32 @@ pub fn render_junit(results: &[CaseResult], deferred: &[DeferredCase]) -> String
             xml_escape(&d.reason)
         ));
         out.push_str("    </testcase>\n");
+    }
+
+    // Baseline loss goes LAST, DEDUPLICATED, exactly as `render` puts
+    // it in a preamble rather than on every line. On the real suite
+    // all 66 cases load the same ontology and so carry the same single
+    // message; repeating it per testcase produced 66 identical lines
+    // and buried the per-case notes that actually differ. Per-case
+    // attribution is not lost to a machine consumer: `render_json`
+    // keeps `baseline_loss` on every case (ruling 6).
+    let baseline: BTreeSet<&str> = results
+        .iter()
+        .flat_map(|r| r.baseline_loss.iter().map(String::as_str))
+        .collect();
+    if !baseline.is_empty() {
+        let mut note = String::from(
+            "known baseline loss (pinned-reasoner limitation, not an ontology defect, \
+             did not affect any verdict above):",
+        );
+        for b in &baseline {
+            note.push_str("\n  ");
+            note.push_str(b);
+        }
+        out.push_str(&format!(
+            "    <system-out>{}</system-out>\n",
+            xml_escape(&note)
+        ));
     }
 
     out.push_str("  </testsuite>\n</testsuites>\n");

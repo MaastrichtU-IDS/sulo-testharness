@@ -312,16 +312,23 @@ sulo-testharness/
   src/
     lib.rs
     manifest.rs   # YAML case -> typed Case struct (serde_yaml), schema validation
+    prefixes.rs   # the prefix map every entity-naming field resolves through
     load.rs       # horned-owl ingest: ontology + data files -> one SetOntology
     claim.rs      # entails / not_entails Turtle fragment -> typed Claims
     oracle.rs     # Claims -> owl-dl-reasoner queries -> Verdict
+    verdict.rs    # the four verdicts, their precedence, and the exit codes
+    materialize.rs # asserted + inferred triples -> one oxigraph store
+    rows.rs       # expect_rows comparison semantics (7.3)
     cq.rs         # materialise -> oxigraph store -> SPARQL -> row comparison
+    golden.rs     # the inference-closure diff (5.2)
     suite.rs      # discovery, filtering, per-case orchestration
     report.rs     # pretty stdout, --format json, --format junit
     main.rs       # `run` and `golden` subcommands
+  tests/          # integration tests, including the mutation self-test
   suites/sulo/    # the reference SULO suite
   mutants/        # deliberately broken sulo.ttl variants, for self-testing
   action.yml      # composite GitHub Action for consumer CI
+  .github/workflows/  # ci.yml, release.yml
 ```
 
 Each module has one job and a narrow interface: `manifest.rs` never touches a
@@ -890,10 +897,13 @@ invisible to review and obvious to a mutant.
 
 ## 10.2 The CLI surface
 
-Two subcommands. The exit codes of 5.4 are reachable from the binary, and
-`tests/cli.rs` observes every one of them by launching it; a unit test over
-`verdict::exit_code` cannot catch a `main` that forgets to propagate, or that
-aggregates the wrong set, or that prints a report and returns success anyway.
+Two subcommands. The exit codes of 5.4 that the binary can produce today, `0`
+through `4`, are each observed by `tests/cli.rs` by launching it; a unit test
+over `verdict::exit_code` cannot catch a `main` that forgets to propagate, or
+that aggregates the wrong set, or that prints a report and returns success
+anyway. Exit `5` awaits the 5.3 differential, and `tests/cli.rs` asserts its
+ABSENCE rather than its production, in a form written to break when phase 7
+lands.
 
 ```
 sulo-testharness run --suite <dir> [--ontology <ttl>] [--filter <substr>]
@@ -918,10 +928,15 @@ exit-code aggregation is structurally impossible rather than filtered against.
 
 ## 11. CI integration
 
-A release workflow builds a static `linux-x86_64` binary, plus
-`macos-aarch64` for local runs, and attaches both to a GitHub release.
-`action.yml` is a composite action that downloads the binary for a pinned tag
-and runs it. Consumer CI in the SULO repository becomes:
+A release workflow builds a static `linux-x86_64` binary (musl, static-pie, so
+it starts on an older glibc than the builder's), plus `macos-aarch64` for local
+runs, and attaches both to a GitHub release along with the tag's own `suites/`
+tree. That third asset is what makes the consumer snippet below work at all:
+the action downloads a binary, but the cases live in this repository, so
+without it a consumer would discover zero cases. Shipping them together also
+guarantees the cases and the engine are the pair that were tested together.
+`action.yml` is a composite action that downloads them for a pinned tag and
+runs the suite. Consumer CI in the SULO repository becomes:
 
 ```yaml
 - uses: MaastrichtU-IDS/sulo-testharness@v0.1.0

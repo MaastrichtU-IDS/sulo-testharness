@@ -285,9 +285,28 @@ fn the_action_propagates_the_harness_exit_code() {
     // Spec section 5.4: every documented code is named, including 3.
     // Indeterminate propagates as a failure by design; see the comment on
     // that arm in action.yml.
+    //
+    // Scoped to the `case ... esac` block, and matched against a
+    // TRIMMED LINE START, because a bare `contains("4)")` is satisfied
+    // by the `Linux/X64)` arm of the download dispatch and `contains
+    // ("2)")` by a comment reading `# 12),`. A review proved it:
+    // deleting both the 2) and 4) arms outright left every test in
+    // this file green. That is the defect shape this project keeps
+    // finding, inside the test written to prevent it.
+    let case_block = {
+        let start = script
+            .find("case \"${status}\" in")
+            .expect("the run script must dispatch on the harness's exit status");
+        let end = script[start..]
+            .find("esac")
+            .expect("the case statement must be closed")
+            + start;
+        &script[start..end]
+    };
     for code in 0..=5 {
+        let arm = format!("{code})");
         assert!(
-            script.contains(&format!("{code})")),
+            case_block.lines().any(|l| l.trim_start().starts_with(&arm)),
             "exit code {code} from spec section 5.4 has no arm in the action's report"
         );
     }
@@ -556,4 +575,31 @@ fn every_run_script_in_both_files_is_valid_bash() {
         }
     }
     assert!(checked >= 2, "found only {checked} run scripts to check");
+}
+
+/// `--allow-indeterminate` must be passed on the exact string "true".
+///
+/// The input's default is the NON-EMPTY string "false", so a `-n`
+/// truthiness test would pass the flag on every consumer run and
+/// silently lower exit 3 to 0: precisely the unearned green ruling 10
+/// forbids. A review proved this was unguarded by swapping the
+/// comparison for `-n` and watching all thirteen tests stay green.
+#[test]
+fn allow_indeterminate_is_gated_on_the_exact_string_true() {
+    let script = scripts(need(&action(), "runs"));
+
+    assert!(
+        script.contains("--allow-indeterminate"),
+        "the action declares an allow-indeterminate input but never passes the flag"
+    );
+    assert!(
+        script.contains("\"${INPUT_ALLOW_INDETERMINATE}\" = \"true\""),
+        "the flag must be gated on an equality test against \"true\": the input defaults to \
+         the non-empty string \"false\", so any truthiness test turns an explicit no into a yes"
+    );
+    assert!(
+        !script.contains("-n \"${INPUT_ALLOW_INDETERMINATE}\"")
+            && !script.contains("-z \"${INPUT_ALLOW_INDETERMINATE}\""),
+        "a -n/-z test on this input would fire on the default \"false\""
+    );
 }

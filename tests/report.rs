@@ -14,7 +14,7 @@
 //! in the repository green.
 
 use sulo_testharness::report::{render, render_json, render_junit};
-use sulo_testharness::suite::CaseResult;
+use sulo_testharness::suite::{CaseResult, DeferredCase};
 use sulo_testharness::verdict::{CheckOutcome, IndeterminateReason, Verdict};
 
 fn passing_case(id: &str, baseline_loss: Vec<String>) -> CaseResult {
@@ -616,5 +616,127 @@ fn junit_carries_baseline_loss_once_and_the_skip_notice_per_case() {
             .children()
             .any(|c| c.has_tag_name("system-out")),
         "a case with nothing case-specific to say must not carry an empty note"
+    );
+}
+
+// ---------------------------------------------------------------
+// Deferred cases in the machine formats.
+//
+// Rulings 6 and 7 say a deferred case is "named and counted in every
+// format". Until these tests existed that claim was unbacked: every
+// render call in this file passed an empty `deferred` slice, and
+// `tests/cli.rs` inspected only the text format, so emptying the JSON
+// array or dropping the JUnit loop left the whole suite green. A
+// promise nothing checks is this project's recurring defect shape.
+// ---------------------------------------------------------------
+
+fn one_deferred() -> Vec<DeferredCase> {
+    vec![DeferredCase {
+        id: "timeinstant-datarange".to_string(),
+        path: std::path::PathBuf::from("suites/sulo/restrictions/timeinstant-datarange.yaml"),
+        reason: "tagged `oracle-hermit`: checked by the CI differential, not this run".to_string(),
+    }]
+}
+
+#[test]
+fn json_names_and_counts_a_deferred_case() {
+    let v = parse_json(&render_json(&four_verdict_results(), &one_deferred()));
+
+    assert_eq!(
+        v["summary"]["deferred"], 1,
+        "the summary must count deferred cases, or a machine consumer reading only the \
+         roll-up cannot tell a run that judged everything from one that skipped a case"
+    );
+
+    let deferred = v["deferred"]
+        .as_array()
+        .expect("the JSON payload must carry a `deferred` array");
+    assert_eq!(
+        deferred.len(),
+        1,
+        "the deferred case must be listed, not only counted"
+    );
+    assert_eq!(deferred[0]["id"], "timeinstant-datarange");
+    assert!(
+        deferred[0]["reason"]
+            .as_str()
+            .is_some_and(|r| r.contains("oracle-hermit")),
+        "the reason must say WHY it was not run: a deferred case with no reason is \
+         indistinguishable from one that was quietly dropped"
+    );
+
+    // The cases that DID run are still all there. A `deferred` array
+    // built by moving a case out of `cases` would satisfy every
+    // assertion above while losing a judged verdict.
+    assert_eq!(
+        v["cases"].as_array().map(Vec::len),
+        Some(four_verdict_results().len()),
+        "deferring must not remove a judged case from `cases`"
+    );
+}
+
+#[test]
+fn junit_names_a_deferred_case_and_counts_it_as_a_skip() {
+    let xml = render_junit(&four_verdict_results(), &one_deferred());
+    let doc = roxmltree::Document::parse(&xml).expect("JUnit output must parse as XML");
+
+    let suite = doc
+        .descendants()
+        .find(|n| n.has_tag_name("testsuite"))
+        .expect("there must be a testsuite element");
+
+    let judged = four_verdict_results().len();
+    let indeterminate = 1; // `four_verdict_results` holds exactly one
+    assert_eq!(
+        suite.attribute("tests"),
+        Some((judged + 1).to_string().as_str()),
+        "`tests` must include the deferred testcase, or the count contradicts the \
+         testcase elements the file actually carries"
+    );
+    assert_eq!(
+        suite.attribute("skipped"),
+        Some((indeterminate + 1).to_string().as_str()),
+        "`skipped` must include the deferred case"
+    );
+
+    let names: Vec<&str> = doc
+        .descendants()
+        .filter(|n| n.has_tag_name("testcase"))
+        .filter_map(|n| n.attribute("name"))
+        .collect();
+    assert!(
+        names
+            .iter()
+            .any(|n| n.contains("timeinstant-datarange") && n.contains("[deferred]")),
+        "the deferred case must appear as a named testcase marked [deferred]: {names:?}"
+    );
+    assert_eq!(
+        names.len(),
+        judged + 1,
+        "every judged case plus the deferred one must be present: {names:?}"
+    );
+}
+
+#[test]
+fn junit_explains_why_an_indeterminate_is_rendered_as_a_skip() {
+    let xml = render_junit(&four_verdict_results(), &[]);
+    let doc = roxmltree::Document::parse(&xml).expect("JUnit output must parse as XML");
+
+    let skipped = doc
+        .descendants()
+        .find(|n| n.has_tag_name("skipped"))
+        .expect("the Indeterminate case must render as <skipped>");
+
+    let message = skipped.attribute("message").unwrap_or_default();
+    assert!(
+        message.contains("exits 3"),
+        "ruling 14 promises the report explains that a skip here still exits 3, so a \
+         consumer can reconcile a failing job with a report showing no failures: {message}"
+    );
+    // The body carries it too, because attribute-value normalisation
+    // collapses newlines and `<skipped>` has no other surviving copy.
+    assert!(
+        skipped.text().is_some_and(|t| t.contains("exits 3")),
+        "the caveat must survive in the element body, not only the attribute"
     );
 }

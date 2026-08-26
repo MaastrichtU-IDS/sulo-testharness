@@ -141,6 +141,11 @@ fn main() -> ExitCode {
                 Format::Junit => render_junit(&results, &deferred),
             };
             print!("{rendered}");
+            // JSON has no trailing newline of its own, so a shell
+            // redirect would otherwise write a file without one.
+            if format == Format::Json {
+                println!();
+            }
 
             // Aggregated over EVERY case, not the last one, and
             // through the same precedence the per-case path uses.

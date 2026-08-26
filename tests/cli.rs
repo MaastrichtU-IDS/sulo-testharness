@@ -17,6 +17,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use sulo_testharness::verdict::{IndeterminateReason, Verdict, exit_code, run_exit_code};
+
 const BIN: &str = env!("CARGO_BIN_EXE_sulo-testharness");
 const SUITE: &str = "suites/sulo";
 const SULO: &str = "../sulo/sulo.ttl";
@@ -319,10 +321,42 @@ fn golden_drift_exits_four() {
 /// no-op would be the very defect this file exists to close.
 #[test]
 fn exit_five_is_not_yet_reachable() {
-    let main = std::fs::read_to_string("src/main.rs").expect("src/main.rs should be readable");
-    assert!(
-        !main.contains("ExitCode::from(5)"),
-        "src/main.rs can now emit exit 5, so the HermiT differential has landed. Replace this \
-         test with a real observation of divergence from the binary."
-    );
+    // Structural, not lexical. `main` returns through
+    // `ExitCode::from(u8::try_from(run_exit_code(..)))`, so a future
+    // `Verdict` arm mapping to 5 would make exit 5 fully reachable
+    // while a grep for the literal `ExitCode::from(5)` stayed green.
+    // Enumerate the verdicts instead and assert the mapping itself
+    // cannot yield 5.
+    let verdicts = [
+        Verdict::Pass,
+        Verdict::UnrefutedPass,
+        Verdict::Fail("x".into()),
+        Verdict::Indeterminate(IndeterminateReason::Timeout),
+    ];
+    for v in &verdicts {
+        for allow in [false, true] {
+            assert_ne!(
+                run_exit_code(v, allow),
+                5,
+                "a verdict now maps to exit 5, so oracle divergence is reachable. The \
+                 HermiT differential (spec 5.3, phase 7) has landed: replace this test \
+                 with a real observation of divergence from the binary."
+            );
+        }
+        assert_ne!(exit_code(v), 5, "exit_code must not yield 5 either");
+    }
+
+    // Belt: no literal 5 anywhere in src/, which would be a path that
+    // bypasses the mapping entirely.
+    for entry in std::fs::read_dir("src").expect("src/ should be readable") {
+        let path = entry.expect("dir entry should be readable").path();
+        if path.extension().is_some_and(|e| e == "rs") {
+            let text = std::fs::read_to_string(&path).expect("source should be readable");
+            assert!(
+                !text.contains("ExitCode::from(5)"),
+                "{} can now emit exit 5 directly. See the message above.",
+                path.display()
+            );
+        }
+    }
 }
