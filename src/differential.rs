@@ -102,6 +102,7 @@ use horned_owl::model::{
 };
 
 use crate::claim::{Claim, Literal, parse_ce, parse_fragment};
+use crate::divergences::PinDiff;
 use crate::hermit::{self, HermitAnswer};
 use crate::manifest::Case;
 use crate::prefixes::{base_mapping, with_overrides};
@@ -169,6 +170,45 @@ impl Answer {
         match self {
             Answer::Inconsistent | Answer::Entailed | Answer::Unsatisfiable => true,
             Answer::Consistent | Answer::NotEntailed | Answer::Satisfiable => false,
+        }
+    }
+
+    /// The stable machine token for this answer.
+    ///
+    /// Separate from [`fmt::Display`] on purpose. `Display` is prose
+    /// for a human reading a report and is free to be reworded; these
+    /// tokens are a FILE FORMAT, written into
+    /// `suites/sulo.divergences` and parsed back by
+    /// [`crate::divergences`]. Sharing one string between the two
+    /// would mean a cosmetic change to the report silently invalidated
+    /// every checked-in pin. (It would fail loudly rather than pass,
+    /// since [`Answer::from_token`] would stop matching, but it would
+    /// fail for a reason that has nothing to do with either reasoner.)
+    #[must_use]
+    pub fn token(self) -> &'static str {
+        match self {
+            Answer::Consistent => "consistent",
+            Answer::Inconsistent => "inconsistent",
+            Answer::Entailed => "entailed",
+            Answer::NotEntailed => "not_entailed",
+            Answer::Satisfiable => "satisfiable",
+            Answer::Unsatisfiable => "unsatisfiable",
+        }
+    }
+
+    /// The inverse of [`Answer::token`]. `None` on anything else, so an
+    /// unreadable pin file is a loud refusal rather than a silently
+    /// dropped row.
+    #[must_use]
+    pub fn from_token(token: &str) -> Option<Answer> {
+        match token {
+            "consistent" => Some(Answer::Consistent),
+            "inconsistent" => Some(Answer::Inconsistent),
+            "entailed" => Some(Answer::Entailed),
+            "not_entailed" => Some(Answer::NotEntailed),
+            "satisfiable" => Some(Answer::Satisfiable),
+            "unsatisfiable" => Some(Answer::Unsatisfiable),
+            _ => None,
         }
     }
 }
@@ -255,6 +295,31 @@ pub enum Origin {
     /// A POSITIVE assertion rustdl reported as a `Fail` carrying
     /// [`crate::oracle::NO_PROOF_MARKER`]. Ruling 7.
     FailingPositive,
+}
+
+impl Origin {
+    /// The stable machine token, used by the JSON report and by the
+    /// pin file. See [`Answer::token`] for why this is not
+    /// [`fmt::Display`].
+    #[must_use]
+    pub fn token(self) -> &'static str {
+        match self {
+            Origin::Gate => "gate",
+            Origin::Unrefuted => "unrefuted",
+            Origin::FailingPositive => "failing_positive",
+        }
+    }
+
+    /// The inverse of [`Origin::token`].
+    #[must_use]
+    pub fn from_token(token: &str) -> Option<Origin> {
+        match token {
+            "gate" => Some(Origin::Gate),
+            "unrefuted" => Some(Origin::Unrefuted),
+            "failing_positive" => Some(Origin::FailingPositive),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for Origin {
@@ -1254,6 +1319,17 @@ pub struct DifferentialOptions<'a> {
     /// than deleted: a divergence is only actionable if the reader can
     /// open the probe that produced it.
     pub workdir: &'a Path,
+    /// The pinned set of KNOWN divergences (`suites/sulo.divergences`),
+    /// or `None`, in which case ANY divergence is exit 5 and nothing
+    /// is documented.
+    ///
+    /// See [`crate::divergences`] for what the pin means and why a
+    /// pinned divergence that DISAPPEARS is a failure too.
+    pub divergences: Option<&'a Path>,
+    /// Re-baseline the pin from this run instead of comparing against
+    /// it. Mirrors `--accept-golden`: never automatic, and refused
+    /// outright when this run holds an unanswered question.
+    pub accept_divergences: bool,
 }
 
 /// One question, asked and compared.
@@ -1344,6 +1420,37 @@ pub fn run_differential(opts: &DifferentialOptions) -> DifferentialOutcome {
         ));
     }
 
+    // A pin is a claim about the WHOLE suite: every divergence that
+    // occurs is listed, and every divergence listed still occurs. A
+    // filtered run has not asked most of the suite's questions, so it
+    // can neither confirm nor refute the entries outside the filter.
+    // Letting it compare anyway would mean either scoring those
+    // entries as "still holds" (a check that cannot fail, since the
+    // question was never put) or as "gone" (a false alarm on every
+    // filtered run). Refusing is the only reading that is true.
+    if opts.divergences.is_some() && opts.filter.is_some() {
+        return DifferentialOutcome::Config(format!(
+            "--divergences and --filter cannot be combined. The pin at {} claims that a \
+             specific set of divergences is the WHOLE set the suite produces, and a run \
+             narrowed by --filter {:?} never asks the questions outside the filter, so it \
+             cannot confirm or refute those entries. Drop one of the two flags.",
+            opts.divergences.unwrap_or(Path::new("?")).display(),
+            opts.filter.unwrap_or_default()
+        ));
+    }
+
+    // Mirrors `--accept-golden`, which is meaningless without
+    // `--golden`. Refused rather than ignored: silently accepting a
+    // no-op flag teaches an operator that they re-baselined when
+    // nothing was written.
+    if opts.accept_divergences && opts.divergences.is_none() {
+        return DifferentialOutcome::Config(
+            "--accept-divergences was passed without --divergences, so there is no pin \
+             file to write. Pass --divergences <path> naming the pin to re-baseline."
+                .to_string(),
+        );
+    }
+
     let selected = match crate::suite::select(opts.suite, Some(opts.ontology), opts.filter) {
         Ok(s) => s,
         Err(msg) => return DifferentialOutcome::Config(msg),
@@ -1393,6 +1500,11 @@ fn sanitise(id: &str) -> String {
 /// `0` requires that EVERY question was asked and every answer
 /// matched. It is never reached over an empty list, because
 /// [`run_differential`] refuses one.
+///
+/// This is the UNPINNED path. When `--divergences` names a pin, the
+/// exit code comes from [`crate::divergences::pinned_exit_code`]
+/// instead, which knows that a documented divergence is not news and
+/// that a documented divergence which stopped occurring is.
 #[must_use]
 pub fn differential_exit_code(asked: &[Asked]) -> i32 {
     if asked
@@ -1533,8 +1645,13 @@ fn tally(asked: &[Asked]) -> (usize, usize, usize) {
 /// informative part of it, but they are printed rather than counted so
 /// that a reader can see WHICH questions were asked, and notice one
 /// they expected and cannot find.
+///
+/// `pin` is the both-directions diff against
+/// `--divergences`, or `None` when no pin was asked for. It is
+/// rendered after the questions, and it, not the divergence count
+/// above it, is what decides the exit code on a pinned run.
 #[must_use]
-pub fn render(asked: &[Asked], opts: &DifferentialOptions) -> String {
+pub fn render(asked: &[Asked], opts: &DifferentialOptions, pin: Option<&PinDiff>) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "differential: rustdl vs HermiT\n  suite:    {}\n  ontology: {}\n  robot:    {}\n  probes:   {}\n\n",
@@ -1591,20 +1708,20 @@ pub fn render(asked: &[Asked], opts: &DifferentialOptions) -> String {
          indeterminate\n",
         asked.len()
     ));
+
+    if let (Some(path), Some(diff)) = (opts.divergences, pin) {
+        out.push_str(&crate::divergences::render(path, diff));
+    }
     out
 }
 
 /// The same report as JSON.
 #[must_use]
-pub fn render_json(asked: &[Asked], opts: &DifferentialOptions) -> String {
+pub fn render_json(asked: &[Asked], opts: &DifferentialOptions, pin: Option<&PinDiff>) -> String {
     let questions: Vec<serde_json::Value> = asked
         .iter()
         .map(|a| {
-            let origin = match a.provenance.origin {
-                Origin::Gate => "gate",
-                Origin::Unrefuted => "unrefuted",
-                Origin::FailingPositive => "failing_positive",
-            };
+            let origin = a.provenance.origin.token();
             let mut row = serde_json::json!({
                 "case": a.provenance.case_id,
                 "check": a.provenance.check,
@@ -1644,7 +1761,16 @@ pub fn render_json(asked: &[Asked], opts: &DifferentialOptions) -> String {
         .collect();
 
     let (agreed, diverged, indeterminate) = tally(asked);
-    let payload = serde_json::json!({
+    // The exit code reported here is the one the process will
+    // actually return, pin included. A payload that said 5 while the
+    // process exited 0 would be a report contradicting its own run,
+    // and a consumer reading the JSON would draw the opposite
+    // conclusion to a consumer reading `$?`.
+    let exit_code = match pin {
+        Some(diff) => crate::divergences::pinned_exit_code(asked, diff),
+        None => differential_exit_code(asked),
+    };
+    let mut payload = serde_json::json!({
         "suite": opts.suite.display().to_string(),
         "ontology": opts.ontology.display().to_string(),
         "robot": opts.robot.display().to_string(),
@@ -1654,9 +1780,15 @@ pub fn render_json(asked: &[Asked], opts: &DifferentialOptions) -> String {
             "agreed": agreed,
             "diverged": diverged,
             "indeterminate": indeterminate,
-            "exit_code": differential_exit_code(asked),
+            "exit_code": exit_code,
         },
         "questions": questions,
     });
+    if let (Some(path), Some(diff)) = (opts.divergences, pin) {
+        payload
+            .as_object_mut()
+            .expect("json! built an object")
+            .insert("pin".into(), crate::divergences::render_json(path, diff));
+    }
     serde_json::to_string_pretty(&payload).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"))
 }

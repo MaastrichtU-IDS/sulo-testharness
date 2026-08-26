@@ -3,6 +3,7 @@
 pub mod claim;
 pub mod cq;
 pub mod differential;
+pub mod divergences;
 pub mod golden;
 pub mod hermit;
 pub mod load;

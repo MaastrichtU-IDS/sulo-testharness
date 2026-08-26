@@ -9,6 +9,7 @@ use sulo_testharness::differential;
 use sulo_testharness::differential::{
     DifferentialOptions, DifferentialOutcome, differential_exit_code, run_differential,
 };
+use sulo_testharness::divergences::{PinOutcome, check_pin, pinned_exit_code};
 use sulo_testharness::golden::{GoldenOutcome, check_golden};
 use sulo_testharness::load::load_file;
 use sulo_testharness::report::{render, render_json, render_junit};
@@ -144,6 +145,19 @@ enum Command {
         /// are never deleted.
         #[arg(long)]
         workdir: Option<PathBuf>,
+        /// The pinned set of KNOWN divergences, diffed in BOTH
+        /// directions: an unpinned divergence is exit 5, and a pinned
+        /// one that no longer occurs is exit 4. Without this flag any
+        /// divergence at all is exit 5. Cannot be combined with
+        /// --filter, since a pin is a claim about the whole suite.
+        #[arg(long)]
+        divergences: Option<PathBuf>,
+        /// Re-baseline the pin from this run instead of comparing
+        /// against it. The deliberate, explicit counterpart of
+        /// --accept-golden; never automatic, and refused when this run
+        /// left a question unanswered.
+        #[arg(long)]
+        accept_divergences: bool,
     },
     /// Compare the inferred closure against a golden file.
     Golden {
@@ -215,6 +229,8 @@ fn main() -> ExitCode {
             filter,
             format,
             workdir,
+            divergences,
+            accept_divergences,
         } => {
             let workdir = workdir.unwrap_or_else(|| {
                 std::env::temp_dir().join(format!(
@@ -228,6 +244,8 @@ fn main() -> ExitCode {
                 robot: &robot,
                 filter: filter.as_deref(),
                 workdir: &workdir,
+                divergences: divergences.as_deref(),
+                accept_divergences,
             };
 
             let asked = match run_differential(&opts) {
@@ -241,15 +259,46 @@ fn main() -> ExitCode {
                 }
             };
 
+            // The pin, if one was asked for. `Rebaselined` and the
+            // two refusals short-circuit the report: none of them is
+            // a comparison, and printing a comparison-shaped report
+            // under them would invite the reader to treat it as one.
+            let pin = match opts.divergences {
+                None => None,
+                Some(path) => match check_pin(&asked, opts.suite, path, opts.accept_divergences) {
+                    PinOutcome::Compared(diff) => Some(diff),
+                    PinOutcome::Rebaselined(p) => {
+                        println!("pinned divergences written to {}", p.display());
+                        return ExitCode::SUCCESS;
+                    }
+                    PinOutcome::RebaselineRequired(m) => {
+                        println!("re-baseline required: {m}");
+                        return ExitCode::from(4);
+                    }
+                    PinOutcome::Error(m) => {
+                        eprintln!("error: {m}");
+                        return ExitCode::from(2);
+                    }
+                },
+            };
+
             match format {
-                DiffFormat::Text => print!("{}", differential::render(&asked, &opts)),
-                DiffFormat::Json => println!("{}", differential::render_json(&asked, &opts)),
+                DiffFormat::Text => print!("{}", differential::render(&asked, &opts, pin.as_ref())),
+                DiffFormat::Json => {
+                    println!("{}", differential::render_json(&asked, &opts, pin.as_ref()))
+                }
             }
 
-            // 5 on any divergence, 3 on any question that could not be
-            // answered, 0 only when every question was asked AND every
-            // answer matched.
-            ExitCode::from(u8::try_from(differential_exit_code(&asked)).unwrap_or(2))
+            // Unpinned: 5 on any divergence, 3 on any question that
+            // could not be answered, 0 only when every question was
+            // asked AND every answer matched. Pinned: 5 on an
+            // UNDOCUMENTED divergence, 4 on a documented one that
+            // stopped occurring, 3 on a question that went unanswered.
+            let code = match &pin {
+                Some(diff) => pinned_exit_code(&asked, diff),
+                None => differential_exit_code(&asked),
+            };
+            ExitCode::from(u8::try_from(code).unwrap_or(2))
         }
         Command::Golden {
             ontology,

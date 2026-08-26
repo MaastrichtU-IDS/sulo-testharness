@@ -446,3 +446,239 @@ fn a_differential_with_an_unusable_jar_exits_two() {
         "the refusal must name the flag that was wrong:\n{stderr}"
     );
 }
+
+// ---------------------------------------------------------------
+// 5b: the pinned set of KNOWN divergences (ruling 12).
+// ---------------------------------------------------------------
+//
+// `tests/divergences.rs` exercises the diff itself over synthetic
+// runs, with no JVM anywhere. What only the binary can show is that
+// `--divergences` actually reaches the process exit code, in all
+// three directions: matched is 0, an unpinned divergence is 5, and a
+// pinned divergence that no longer occurs is 4.
+//
+// These run over `suites/sulo/restrictions` rather than the whole
+// suite, because the whole suite is 92 questions and about two and a
+// half minutes of JVM. The sub-suite holds the one case the two
+// reasoners disagree about, which is all these rows need. Its pin is
+// written into a scratch directory, so `suites/sulo.divergences`
+// itself is never touched by a test.
+
+/// The sub-suite these rows run over. Its `# suite:` header must
+/// match, since a pin describes one corpus and comparing it against
+/// another is refused.
+const RESTRICTIONS: &str = "suites/sulo/restrictions";
+
+/// Write a pin file for `RESTRICTIONS` holding exactly `rows`.
+///
+/// The reasoner version comes from the same constant the harness
+/// writes, so a version bump does not turn these rows into a
+/// re-baseline prompt.
+fn write_pin(dir: &Path, name: &str, rows: &[&str]) -> PathBuf {
+    let path = dir.join(name);
+    let mut text = format!(
+        "# suite: {RESTRICTIONS}\n# reasoner: {}\n",
+        sulo_testharness::golden::REASONER_VERSION
+    );
+    for row in rows {
+        text.push_str(row);
+        text.push('\n');
+    }
+    std::fs::write(&path, text).expect("the scratch pin should be writable");
+    path
+}
+
+/// The one divergence the real suite produces, as a pin row.
+const REAL_ROW: &str =
+    "timeinstant-datarange\tgate: expected inconsistent\tgate\tconsistent\tinconsistent";
+
+fn pinned_differential(jar: &Path, pin: &Path, scratch_name: &str) -> Output {
+    let workdir = scratch(scratch_name);
+    run(&[
+        "differential",
+        "--suite",
+        RESTRICTIONS,
+        "--ontology",
+        SULO,
+        "--robot",
+        jar.to_str().expect("the jar path is UTF-8"),
+        "--workdir",
+        workdir.to_str().expect("the scratch path is UTF-8"),
+        "--divergences",
+        pin.to_str().expect("the pin path is UTF-8"),
+    ])
+}
+
+/// A run whose divergences match the pin is GREEN.
+///
+/// This is the row that makes the weekly job usable at all. A job that
+/// is permanently red gets muted, and a muted alarm is this project's
+/// recurring defect shape wearing different clothes.
+#[test]
+fn a_run_matching_its_pin_exits_zero() {
+    require_sulo();
+    let Some(jar) = robot_jar() else { return };
+
+    let dir = scratch("pin-match");
+    let pin = write_pin(&dir, "match.divergences", &[REAL_ROW]);
+    let out = pinned_differential(&jar, &pin, "pin-match-probes");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "a divergence the pin describes is documented, not news. stdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout.contains("1 as pinned, 0 unpinned, 0 stale, 0 unconfirmed"),
+        "the run must say the pin was actually CONFIRMED, not merely that it exited \
+         0:\n{stdout}"
+    );
+}
+
+/// An unpinned divergence is exit 5. Something changed.
+#[test]
+fn a_divergence_outside_the_pin_exits_five() {
+    require_sulo();
+    let Some(jar) = robot_jar() else { return };
+
+    let dir = scratch("pin-unpinned");
+    let pin = write_pin(&dir, "empty.divergences", &[]);
+    let out = pinned_differential(&jar, &pin, "pin-unpinned-probes");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(5),
+        "a disagreement nobody reviewed must still be exit 5. stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("UNPINNED") && stdout.contains("timeinstant-datarange"),
+        "the unpinned divergence must be NAMED:\n{stdout}"
+    );
+}
+
+/// The direction ruling 12 exists for: a pinned divergence that no
+/// longer occurs is exit 4, never a quiet pass.
+///
+/// Proved by pinning a divergence that does not happen. `duration-
+/// nonnegative` is a real case in this sub-suite and the two reasoners
+/// agree about it, so this row is exactly the shape of "the gap
+/// closed": the pin describes something the run did not find.
+#[test]
+fn a_pinned_divergence_that_no_longer_occurs_exits_four() {
+    require_sulo();
+    let Some(jar) = robot_jar() else { return };
+
+    let dir = scratch("pin-stale");
+    let pin = write_pin(
+        &dir,
+        "stale.divergences",
+        &[
+            "duration-nonnegative\tgate: expected consistent\tgate\tconsistent\tinconsistent",
+            REAL_ROW,
+        ],
+    );
+    let out = pinned_differential(&jar, &pin, "pin-stale-probes");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(4),
+        "a documented divergence that stopped occurring means the pin is a lie and must \
+         be re-baselined deliberately; it is never a quiet pass. stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("STALE") && stdout.contains("duration-nonnegative"),
+        "the stale entry must be NAMED:\n{stdout}"
+    );
+}
+
+/// `--divergences` with `--filter` is refused: a pin is a claim about
+/// a whole corpus, and a filtered run never asks the questions outside
+/// the filter, so it can neither confirm nor refute those entries.
+///
+/// Needs no jar, because the refusal comes before any case is loaded.
+#[test]
+fn a_pinned_run_cannot_be_narrowed_by_a_filter() {
+    require_sulo();
+    let out = run(&[
+        "differential",
+        "--suite",
+        SUITE,
+        "--ontology",
+        SULO,
+        "--robot",
+        "tests/fixtures/clean.ttl",
+        "--divergences",
+        "suites/sulo.divergences",
+        "--filter",
+        "restrictions",
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a filtered run cannot judge a whole-suite pin. stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("--divergences") && stderr.contains("--filter"),
+        "the refusal must name both flags:\n{stderr}"
+    );
+}
+
+/// `--accept-divergences` without `--divergences` writes nothing, so
+/// it is refused rather than ignored: silently accepting a no-op flag
+/// teaches an operator that they re-baselined when they did not.
+#[test]
+fn accepting_a_pin_that_was_never_named_is_refused() {
+    require_sulo();
+    let out = run(&[
+        "differential",
+        "--suite",
+        SUITE,
+        "--ontology",
+        SULO,
+        "--robot",
+        "tests/fixtures/clean.ttl",
+        "--accept-divergences",
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("--accept-divergences") && stderr.contains("--divergences"),
+        "the refusal must name both flags:\n{stderr}"
+    );
+}
+
+/// A pin recorded against a different reasoner is exit 4 from the
+/// binary, not a comparison.
+///
+/// Covers `main`'s routing of `PinOutcome::RebaselineRequired`, which
+/// no unit test can reach: `check_pin` returning the variant and the
+/// process returning 4 are two different claims, and only this one
+/// observes the second.
+#[test]
+fn a_pin_from_another_reasoner_exits_four_from_the_binary() {
+    require_sulo();
+    let Some(jar) = robot_jar() else { return };
+
+    let dir = scratch("pin-version");
+    let path = dir.join("old.divergences");
+    std::fs::write(
+        &path,
+        format!("# suite: {RESTRICTIONS}\n# reasoner: rustdl v0.0.1-ancient\n{REAL_ROW}\n"),
+    )
+    .expect("the scratch pin should be writable");
+
+    let out = pinned_differential(&jar, &path, "pin-version-probes");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(4),
+        "a pin whose provenance does not match this build is reviewed, not compared. \
+         stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("re-baseline required") && stdout.contains("v0.0.1-ancient"),
+        "the message must name what was stale:\n{stdout}"
+    );
+}

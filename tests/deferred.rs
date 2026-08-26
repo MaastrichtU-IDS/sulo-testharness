@@ -31,8 +31,10 @@ const SUITE: &str = "suites/sulo";
 /// Spec line 746 puts such a case in the CI differential (5.3), which
 /// now exists: the `differential` subcommand asks HermiT, HermiT finds
 /// the clash rustdl cannot, and the disagreement is reported as a
-/// Divergence (exit 5). The tag means "not decided by THIS run", not
-/// "not decided by anything".
+/// Divergence. That divergence is expected, so it is pinned in
+/// `suites/sulo.divergences` (see `tests/divergences.rs`), which is
+/// where the day it STOPS occurring will be caught. The tag means "not
+/// decided by THIS run", not "not decided by anything".
 const DEFERRED: &[&str] = &["timeinstant-datarange"];
 
 fn tagged_on_disk() -> BTreeSet<String> {

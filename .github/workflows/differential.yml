@@ -21,18 +21,33 @@
 #    second variable turns that skip into a failure (plan ruling 9,
 #    hermit::resolve_jar).
 #
-# 2. **This job is expected to be RED today, and the redness is true.**
-#    `suites/sulo/restrictions/timeinstant-datarange` asserts a
-#    data-range allValuesFrom that horned-owl drops on load, so rustdl
-#    reports the offending data consistent and HermiT finds the clash.
-#    That is a real disagreement between two reasoners about real SULO,
-#    it is exit 5, and it is the single most valuable thing this job can
-#    say. Do NOT reach for `continue-on-error` to quiet it: that turns
-#    the one job in this repository whose whole purpose is to detect
-#    disagreement into a job that can never report one, which is the
-#    defect shape this project keeps finding. The two honest ways out
-#    are a reasoner that can represent the axiom, or a deliberate,
-#    reviewed pin of the known divergence in the harness itself.
+# 2. **This job is GREEN today, and the one real divergence is
+#    pinned, not silenced.** `suites/sulo/restrictions/timeinstant-
+#    datarange` asserts a data-range allValuesFrom that horned-owl drops
+#    on load, so rustdl reports the offending data consistent and HermiT
+#    finds the clash. That is a real disagreement between two reasoners
+#    about real SULO, and it is recorded in `suites/sulo.divergences`
+#    with BOTH answers, so a reader can see what the documented
+#    disagreement is rather than only that one exists.
+#
+#    The pin is diffed in BOTH directions (ruling 12, src/divergences.rs):
+#
+#      * a divergence NOT in the pin is exit 5, and this job goes red;
+#      * a divergence IN the pin that no longer occurs is exit 4, and
+#        this job ALSO goes red. That direction is the point. rustdl
+#        gaining the capability, or SULO changing, or the case moving,
+#        is exactly the news this job exists to deliver, and a pin that
+#        only caught new divergences would absorb it silently.
+#
+#    Do NOT reach for `continue-on-error`, and do not add `--filter` to
+#    the step below (it is refused anyway: a filtered run cannot judge a
+#    whole-suite pin). Either would turn the one job in this repository
+#    whose whole purpose is to detect disagreement into a job that can
+#    never report one, which is the defect shape this project keeps
+#    finding. Re-baselining is `--accept-divergences`, it is never
+#    automatic, and `tests/divergences.rs` diffs the checked-in pin
+#    against a table so a re-baseline cannot be committed without a
+#    reviewed edit.
 name: HermiT differential
 
 on:
@@ -123,28 +138,46 @@ jobs:
         env:
           SULO_ROBOT_JAR: ${{ github.workspace }}/sulo-testharness/robot.jar
           SULO_ROBOT_JAR_REQUIRED: "1"
-        run: cargo test --test hermit --test differential --test cli
+        run: cargo test --test hermit --test differential --test divergences --test cli
 
-      # The run itself. Its exit code is the job's outcome: 5 on any
-      # divergence, 3 on any question neither reasoner could be asked,
-      # 2 on a configuration error, 0 only when every question was put
-      # to both reasoners and every answer matched. See point 2 of this
-      # file's header before making this step green.
+      # The run itself. Its exit code is the job's outcome: 5 on a
+      # divergence the pin does not describe, 4 on a pinned divergence
+      # that no longer occurs, 3 on a question neither reasoner could be
+      # asked, 2 on a configuration error, 0 only when every question
+      # was put to both reasoners, every answer matched or was pinned,
+      # and every pin was confirmed. See point 2 of this file's header
+      # before reaching for anything that would quiet this step.
+      #
+      # `--suite` is spelled exactly as the pin's `# suite:` header
+      # spells it; a different spelling of the same directory is
+      # reported as re-baseline required rather than compared.
+      #
+      # `set -e` is deliberately NOT used here. With it, the first run
+      # to exit non-zero would abort the step and the SECOND report
+      # would never be written, so the run that most needs a readable
+      # report is exactly the run that does not get one. The step's
+      # outcome is the text run's exit code, recorded and re-raised at
+      # the end.
       - name: Differential
         run: |
-          set -euo pipefail
+          set -uo pipefail
           cargo run --release -- differential \
             --suite suites/sulo \
             --ontology ../sulo/sulo.ttl \
             --robot robot.jar \
             --workdir differential-probes \
-            --format json > differential.json
-          cargo run --release -- differential \
-            --suite suites/sulo \
-            --ontology ../sulo/sulo.ttl \
-            --robot robot.jar \
-            --workdir differential-probes \
+            --divergences suites/sulo.divergences \
             --format text | tee differential.txt
+          status=${PIPESTATUS[0]}
+          cargo run --release -- differential \
+            --suite suites/sulo \
+            --ontology ../sulo/sulo.ttl \
+            --robot robot.jar \
+            --workdir differential-probes \
+            --divergences suites/sulo.divergences \
+            --format json > differential.json || true
+          echo "differential exited ${status}"
+          exit "${status}"
 
       # `always()`, because the report is at its most useful in exactly
       # the run that failed. A divergence is only actionable if the
@@ -159,4 +192,5 @@ jobs:
             sulo-testharness/differential.json
             sulo-testharness/differential.txt
             sulo-testharness/differential-probes/
+            sulo-testharness/suites/sulo.divergences
           if-no-files-found: warn

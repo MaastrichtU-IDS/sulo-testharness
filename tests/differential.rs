@@ -1575,6 +1575,8 @@ fn an_unusable_robot_jar_is_a_configuration_error() {
         robot: Path::new("/nonexistent/robot.jar"),
         filter: Some("taxonomy/deep-chain"),
         workdir: &workdir,
+        divergences: None,
+        accept_divergences: false,
     }) {
         DifferentialOutcome::Config(msg) => assert!(
             msg.contains("--robot") && msg.contains("not a readable file"),
@@ -1598,6 +1600,8 @@ fn a_filter_matching_nothing_is_a_configuration_error() {
         robot: Path::new("tests/fixtures/clean.ttl"),
         filter: Some("no-such-case-anywhere"),
         workdir: &workdir,
+        divergences: None,
+        accept_divergences: false,
     }) {
         DifferentialOutcome::Config(msg) => assert!(msg.contains("matched none of the"), "{msg}"),
         DifferentialOutcome::Ran(_) => panic!("a filter matching nothing must be refused"),

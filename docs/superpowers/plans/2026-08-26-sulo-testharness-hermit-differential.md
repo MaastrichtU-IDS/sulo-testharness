@@ -215,3 +215,47 @@ exists to deliver.
 Re-baselining is explicit, mirroring `--accept-golden`, and the pin records both
 reasoners' answers so a reader can see what the documented disagreement actually
 is rather than only that one exists.
+
+## Rulings made while implementing ruling 12
+
+13. **A stale pin is exit 4, not exit 5.** Ruling 12 fixes exit 5 for a
+    divergence the pin does not describe and leaves the other direction's
+    code unstated. Reusing 5 for both would give opposite findings the
+    same code: an unpinned divergence means "the two reasoners disagree
+    about something nobody reviewed", while a stale pin means the
+    OPPOSITE, that they now agree about something they used to disagree
+    about. A reader handed a 5 goes looking for a disagreement that is
+    not there. Exit 4 already means "a checked-in baseline no longer
+    describes reality, re-baseline deliberately", which is exactly what a
+    stale pin is, and the fix is the same kind of act as fixing golden
+    drift. Precedence is 5 over 4 over 3 over 0. Consequence worth
+    stating: a divergence whose ANSWERS flipped produces both an unpinned
+    entry and a stale one, and reports as 5, because the live
+    disagreement is the more urgent half.
+
+14. **`--divergences` cannot be combined with `--filter`.** A pin claims
+    that a specific set is the WHOLE set the suite produces. A filtered
+    run never asks the questions outside the filter, so scoring those
+    entries as "still holds" would be a check that cannot fail and
+    scoring them as "gone" would be a false alarm on every filtered run.
+    Refusing is the only reading that is true, and it also closes the
+    easiest way to quiet the job. A `# suite:` header in the pin closes
+    the other half, a run pointed at a different corpus.
+
+15. **`--accept-divergences` is refused over a run holding an
+    Indeterminate.** The usual way to get Indeterminates everywhere is a
+    broken jar. Accepting from such a run would write an EMPTY pin,
+    erasing every documented divergence and leaving a permanently green
+    job that asserted nothing: the recurring defect shape arriving
+    through the escape hatch built to avoid it. Same reason a pinned
+    divergence whose question came back Indeterminate is UNCONFIRMED
+    (exit 3) rather than stale (exit 4) or matched (exit 0): a question
+    HermiT could not answer is evidence of nothing in either direction.
+
+16. **The checked-in pin is itself diffed against a table, in the
+    jar-free CI job.** `--accept-divergences` alone would otherwise be
+    enough to absorb a change: somebody looking at a red weekly job could
+    re-baseline, commit, and the whole thing would go green with nobody
+    having reviewed what moved. `tests/divergences.rs` holds the table,
+    both directions, plus a non-empty guard so the diff cannot hold
+    vacuously over two empty sets. Editing that table is the review.

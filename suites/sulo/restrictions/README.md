@@ -106,15 +106,24 @@ restrictions/timeinstant-datarange` asks HermiT the same consistency
 question the case's gate asks rustdl, and HermiT answers INCONSISTENT,
 which is exactly what `expect_inconsistent: true` claims. rustdl
 answers CONSISTENT. The two reasoners therefore DISAGREE, and the
-differential reports that as a `Divergence` and exits 5.
+differential reports that as a `Divergence`.
 
 That divergence is the honest outcome, not a bug in the job: the two
 reasoners really do disagree about real SULO here, and naming which
 one is the outlier (rustdl, incomplete on this query) is the most
 valuable thing either of them can say. `.github/workflows/differential.yml`
-runs it, and its header explains why quieting the resulting red with
+runs it, and its header explains why quieting it with
 `continue-on-error` would turn the one job built to detect
 disagreement into a job that can never report one.
+
+Because the disagreement is expected, it is PINNED in
+`suites/sulo.divergences`, which records both reasoners' answers. A run
+whose divergences match the pin exits 0, so the weekly job is green
+today and red means something changed. The pin is diffed in both
+directions: this entry NO LONGER OCCURRING is exit 4, not a quiet pass,
+because that is precisely the day rustdl gained the capability and this
+case should move into `tests/restrictions.rs`'s `EXPECTED` table. See
+`src/divergences.rs`.
 
 The case moves into `tests/restrictions.rs`'s enforced `EXPECTED`
 table as a genuine `Pass` only when the PINNED REASONER can enforce

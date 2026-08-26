@@ -57,9 +57,8 @@ complete for OWL 2 DL, so the `differential` subcommand puts every
 absence-resting answer the harness produces back to HermiT through ROBOT: every
 consistency verdict, every negative assertion, and every positive assertion
 rustdl reported as a Fail because it could not find a proof. A disagreement is
-`Divergence` and exit 5, and it is reported with BOTH answers, because the point
-is that one of the two reasoners is wrong and the reader has to be able to tell
-which.
+`Divergence`, and it is reported with BOTH answers, because the point is that
+one of the two reasoners is wrong and the reader has to be able to tell which.
 
 It needs a JVM and a ROBOT jar, so it is a CI-only job
 (`.github/workflows/differential.yml`) and never runs on the default path. On
@@ -67,6 +66,16 @@ SULO today it asks 92 questions and finds one real divergence, on
 `timeinstant-datarange`: rustdl cannot represent the data-range `allValuesFrom`
 at all, so it reports the offending data consistent while HermiT finds the
 clash.
+
+That one divergence is expected, so it is PINNED in `suites/sulo.divergences`
+rather than left to keep the job permanently red, because a permanently red job
+gets muted and a muted alarm is a check that cannot fail. The pin records both
+reasoners' answers and is diffed in both directions: a divergence the pin does
+not describe is exit 5, and a divergence the pin DOES describe that no longer
+occurs is exit 4, because rustdl gaining that capability is exactly the news the
+job exists to deliver and must not be absorbed silently. Re-baselining is
+`--accept-divergences`, never automatic, and the checked-in pin is itself diffed
+against a table in `tests/divergences.rs`.
 
 ### Not yet done
 
@@ -134,15 +143,33 @@ is its own subcommand rather than a flag on `run`:
 
 ```sh
 cargo run -- differential --suite suites/sulo --ontology ../sulo/sulo.ttl \
-                          --robot robot.jar
+                          --robot robot.jar \
+                          --divergences suites/sulo.divergences
 ```
 
-Exit 5 on any divergence, 3 on any question neither reasoner could be asked, 2
-on a configuration error, and 0 only when every question was put to both
-reasoners and every answer matched. `--filter` narrows it the same way `run`'s
-does, `--format json` is for a machine consumer, and `--workdir` says where the
-probe ontologies are kept: a divergence is only actionable if the reader can
-open the probe that produced it.
+With `--divergences`: exit 5 on a divergence the pin does not describe, 4 on a
+pinned divergence that no longer occurs, 3 on any question neither reasoner
+could be asked, 2 on a configuration error, and 0 only when every question was
+put to both reasoners, every answer matched or was pinned, and every pin was
+confirmed. Without it, any divergence at all is exit 5.
+
+`--filter` narrows the run the same way `run`'s does, but cannot be combined
+with `--divergences`: a pin is a claim about a whole suite, and a filtered run
+never asks the questions outside the filter, so it can neither confirm nor
+refute those entries. `--format json` is for a machine consumer, and `--workdir`
+says where the probe ontologies are kept: a divergence is only actionable if the
+reader can open the probe that produced it.
+
+Re-baseline the pin deliberately, exactly as `--accept-golden` re-baselines the
+closure. It is refused if the run left any question unanswered, since a broken
+jar would otherwise write an empty pin and leave a permanently green job:
+
+```sh
+cargo run -- differential --suite suites/sulo --ontology ../sulo/sulo.ttl \
+                          --robot robot.jar \
+                          --divergences suites/sulo.divergences \
+                          --accept-divergences
+```
 
 Compare the inferred closure against the committed golden file, and re-baseline
 it deliberately after a legitimate change:
