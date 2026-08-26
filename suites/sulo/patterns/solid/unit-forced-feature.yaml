@@ -1,0 +1,20 @@
+id: unit-forced-feature
+description: >-
+  The unit individual, typed only as the external obo:UO_0000027 (not
+  imported, so that typing does no work here), is forced into
+  sulo:Feature purely by being hasPart of the measurement: the
+  measurement is entailed Feature (see typing-chain.yaml), and
+  Feature rdfs:subClassOf (hasPart only Feature) then applies to
+  every hasPart value of anything Feature-typed. This is the
+  pattern's semantics doing real work, verified during design, not an
+  artifact of how the unit happens to be typed. Mutation-verified as
+  needing BOTH Feature's restriction and InformationObject's own
+  (hasPart only InformationObject); either alone still propagates
+  Feature-hood, since measurement is both. See ../README.md.
+data: data/measurement.ttl
+prefixes:
+  ex: http://example.org/
+  obo: http://purl.obolibrary.org/obo/
+entails: |
+  ex:unit a sulo:Feature .
+tags: [pattern, solid]

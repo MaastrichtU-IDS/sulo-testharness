@@ -1,0 +1,13 @@
+id: attime
+description: >-
+  atTime rdfs:range sulo:Time: a bare atTime assertion between two
+  untyped skolemised individuals entails that the object is a Time.
+  (atTime's rdfs:domain is owl:Thing, which is vacuously true of
+  everything and asserted about nothing, so only the range side gets
+  a case.)
+data: data/attime.ttl
+prefixes:
+  ex: http://example.org/
+entails: |
+  ex:t a sulo:Time .
+tags: [domains-ranges]

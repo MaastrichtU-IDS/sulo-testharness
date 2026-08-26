@@ -1,0 +1,22 @@
+@prefix sulo: <https://w3id.org/sulo/> .
+@prefix ex:   <http://example.org/> .
+
+# Nine separate pairs, one per owl:inverseOf axiom under test. Each
+# pair is isolated to its own two individuals: several of these
+# properties carry an rdfs:domain/rdfs:range (e.g. isPrecededBy is
+# Process-to-Process, hasParticipant is Process-to-Object), and
+# sharing one pair of individuals across all nine would force
+# contradictory domain/range typing onto the same individual (e.g.
+# both Process, from isPrecededBy, and InformationObject, which is
+# disjoint with Process, from isReferredToIn's range) and would make
+# the fixture inconsistent for a reason unrelated to the inverse
+# axioms this case exists to test.
+ex:a1 sulo:atTime ex:b1 .
+ex:a2 sulo:isPrecededBy ex:b2 .
+ex:a3 sulo:isReferredToIn ex:b3 .
+ex:a4 sulo:contains ex:b4 .
+ex:a5 sulo:hasFeature ex:b5 .
+ex:a6 sulo:hasItem ex:b6 .
+ex:a7 sulo:hasParticipant ex:b7 .
+ex:a8 sulo:hasDirectPart ex:b8 .
+ex:a9 sulo:hasPart ex:b9 .

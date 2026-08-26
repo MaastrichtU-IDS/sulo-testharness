@@ -1,0 +1,14 @@
+id: refersto
+description: >-
+  refersTo rdfs:domain sulo:InformationObject: a bare refersTo
+  assertion entails that the subject is an InformationObject.
+  (refersTo's rdfs:range is owl:Thing, vacuous, so only the domain
+  side gets a case. refersTo is owl:inverseOf isReferredToIn, so this
+  and isreferredtoin.yaml's entailment are the same fact from
+  opposite directions.)
+data: data/refersto.ttl
+prefixes:
+  ex: http://example.org/
+entails: |
+  ex:d a sulo:InformationObject .
+tags: [domains-ranges]

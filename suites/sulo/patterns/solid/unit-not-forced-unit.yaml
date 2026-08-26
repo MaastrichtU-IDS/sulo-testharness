@@ -1,0 +1,19 @@
+id: unit-not-forced-unit
+description: >-
+  Feature-hood is entailed for the unit (unit-forced-feature.yaml),
+  but sulo:Unit-hood is NOT: nothing in the pattern's axioms narrows
+  the universally-forced "some Feature" down to specifically Unit,
+  and Quantity's OWN someValuesFrom Unit restriction is existential,
+  so it does not force this particular, already-named hasPart value
+  into Unit either (an anonymous witness would satisfy it just as
+  well). Pinned here as a non-entailment, a real finding worth
+  keeping: downstream data must NOT assume the pattern supplies Unit
+  typing for free. A real ontology built on SOLID must type its units
+  sulo:Unit explicitly.
+data: data/measurement.ttl
+prefixes:
+  ex: http://example.org/
+  obo: http://purl.obolibrary.org/obo/
+not_entails: |
+  ex:unit a sulo:Unit .
+tags: [pattern, solid, deliberate-absence]

@@ -1,0 +1,6 @@
+PREFIX sulo: <https://w3id.org/sulo/>
+SELECT ?p WHERE {
+  <http://example.org/encounter> sulo:hasParticipant ?p .
+  ?p a <http://purl.obolibrary.org/obo/NCBITaxon_9606> .
+}
+ORDER BY ?p

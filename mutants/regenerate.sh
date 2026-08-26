@@ -91,4 +91,146 @@ out = out.replace(needle_contains, '    owl:inverseOf sulo:isPartOf .', 1)
 open(out_path, 'w').write(out)
 PY
 
-echo "regenerated: no-role-chain.ttl, no-transitive-parthood.ttl, no-feature-union.ttl, no-subproperty-containment.ttl"
+# 5. Delete Feature's own `rdfs:subClassOf sulo:Object` (a single,
+#    non-redundant named-class axiom, distinct from the two blank-node
+#    restrictions in the same list). Catches patterns/solid/typing-chain
+#    and the patterns/solid/value-quality-unit competency question.
+python3 - "$SULO" "$MUTANTS/no-feature-object.ttl" <<'PY'
+import sys
+src_path, out_path = sys.argv[1], sys.argv[2]
+src = open(src_path).read()
+needle = '''        [ a owl:Restriction ;
+            owl:allValuesFrom sulo:Feature ;
+            owl:onProperty sulo:hasPart ],
+        sulo:Object ;'''
+replacement = '''        [ a owl:Restriction ;
+            owl:allValuesFrom sulo:Feature ;
+            owl:onProperty sulo:hasPart ] ;'''
+assert src.count(needle) == 1, f"expected exactly 1 occurrence in {src_path}, found {src.count(needle)}"
+open(out_path, 'w').write(src.replace(needle, replacement, 1))
+PY
+
+# 6. Delete BOTH `hasPart only self` restrictions, on Feature AND on
+#    InformationObject. Mutation-verified as needing both: either alone
+#    still leaves the other class's restriction to propagate Feature-hood
+#    onto the same individual (measurement is typed both Feature and
+#    InformationObject). Catches patterns/solid/unit-forced-feature, and
+#    also (verified) restrictions/hasPart-propagation-feature and
+#    restrictions/hasPart-propagation-informationobject, since those two
+#    cases test the exact same restrictions directly.
+python3 - "$SULO" "$MUTANTS/no-selfpart-feature-and-informationobject.ttl" <<'PY'
+import sys
+src_path, out_path = sys.argv[1], sys.argv[2]
+src = open(src_path).read()
+
+needle_feature = '''        [ a owl:Restriction ;
+            owl:allValuesFrom sulo:Feature ;
+            owl:onProperty sulo:hasPart ],
+        sulo:Object ;'''
+assert src.count(needle_feature) == 1, f"expected exactly 1 occurrence in {src_path}"
+out = src.replace(needle_feature, '        sulo:Object ;', 1)
+
+needle_io = '''    rdfs:subClassOf [ a owl:Restriction ;
+            owl:allValuesFrom sulo:InformationObject ;
+            owl:onProperty sulo:hasPart ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom rdfs:Literal ;
+            owl:onProperty sulo:hasValue ],
+        sulo:Feature .'''
+assert out.count(needle_io) == 1, f"expected exactly 1 occurrence in {src_path}"
+replacement_io = '''    rdfs:subClassOf [ a owl:Restriction ;
+            owl:allValuesFrom rdfs:Literal ;
+            owl:onProperty sulo:hasValue ],
+        sulo:Feature .'''
+out = out.replace(needle_io, replacement_io, 1)
+
+open(out_path, 'w').write(out)
+PY
+
+# 7. Delete Process's `hasPart only Process` restriction entirely (its
+#    only rdfs:subClassOf member, so the whole predicate-object pair is
+#    removed, not just the blank node). Catches
+#    restrictions/hasPart-propagation-process.
+python3 - "$SULO" "$MUTANTS/no-selfpart-process.ttl" <<'PY'
+import sys
+src_path, out_path = sys.argv[1], sys.argv[2]
+src = open(src_path).read()
+needle = '''    rdfs:subClassOf [ a owl:Restriction ;
+            owl:allValuesFrom sulo:Process ;
+            owl:onProperty sulo:hasPart ] ;
+'''
+assert src.count(needle) == 1, f"expected exactly 1 occurrence in {src_path}"
+open(out_path, 'w').write(src.replace(needle, '', 1))
+PY
+
+# 8. Delete Quantity's `hasPart some Unit` someValuesFrom restriction
+#    (its only other rdfs:subClassOf member besides the named class
+#    sulo:InformationObject). Catches
+#    restrictions/quantity-haspart-some-unit. (Not
+#    TimeInterval's identically-shaped restriction: restrictions/README.md
+#    records that one as semantically inert, re-derived via TimeInterval
+#    subClassOf Time subClassOf Quantity.)
+python3 - "$SULO" "$MUTANTS/no-quantity-unit-somevaluesfrom.ttl" <<'PY'
+import sys
+src_path, out_path = sys.argv[1], sys.argv[2]
+src = open(src_path).read()
+needle = '''    rdfs:subClassOf [ a owl:Restriction ;
+            owl:onProperty sulo:hasPart ;
+            owl:someValuesFrom sulo:Unit ],
+        sulo:InformationObject .'''
+assert src.count(needle) == 1, f"expected exactly 1 occurrence in {src_path}"
+open(out_path, 'w').write(src.replace(needle, '    rdfs:subClassOf sulo:InformationObject .', 1))
+PY
+
+# 9. Delete hasParticipant's own `rdfs:domain sulo:Process` AND its
+#    inverse isParticipantIn's own `rdfs:range sulo:Process` together.
+#    Single-axiom deletion here is inert (domains-ranges/README.md):
+#    ObjectPropertyDomain(hasParticipant, Process) is re-derivable from
+#    ObjectPropertyRange(isParticipantIn, Process) plus
+#    InverseObjectProperties, and vice versa. Catches
+#    domains-ranges/hasparticipant (and, verified, domains-ranges/
+#    isparticipantin too, since both cases require "?p a Process").
+python3 - "$SULO" "$MUTANTS/no-participant-domain-and-inverse-range.ttl" <<'PY'
+import sys
+src_path, out_path = sys.argv[1], sys.argv[2]
+src = open(src_path).read()
+
+needle_domain = '''    rdfs:domain sulo:Process ;
+    rdfs:range sulo:Object ;
+    owl:inverseOf sulo:isParticipantIn ;'''
+assert src.count(needle_domain) == 1, f"expected exactly 1 occurrence in {src_path}"
+out = src.replace(
+    needle_domain,
+    '    rdfs:range sulo:Object ;\n    owl:inverseOf sulo:isParticipantIn ;',
+    1,
+)
+
+needle_range = '''    rdfs:domain sulo:Object ;
+    rdfs:range sulo:Process .'''
+assert out.count(needle_range) == 1, f"expected exactly 1 occurrence in {src_path}"
+out = out.replace(needle_range, '    rdfs:domain sulo:Object .', 1)
+
+open(out_path, 'w').write(out)
+PY
+
+# 10. Delete sulo:Object's `owl:disjointWith sulo:Process`, the only
+#     axiom in sulo.ttl stating Object/Process disjointness (it is not
+#     a member of either owl:AllDisjointClasses list, and not a
+#     disjointUnionOf). Verified NOT re-derived by Object's own
+#     `complementOf (hasPart some Process)` restriction plus hasPart
+#     reflexivity: the pinned reasoner reports the mutant CONSISTENT
+#     for an individual typed both Object and Process, so this single
+#     deletion is effective (empirical trace in mutants/README.md).
+#     Catches taxonomy/disjoint-object-process, the first committed
+#     mutant coverage for the taxonomy group's 14 disjointness
+#     counter-examples.
+python3 - "$SULO" "$MUTANTS/no-object-process-disjoint.ttl" <<'PYX'
+import sys
+src_path, out_path = sys.argv[1], sys.argv[2]
+src = open(src_path).read()
+needle = '    owl:disjointWith sulo:Process ;\n'
+assert src.count(needle) == 1, f"expected exactly 1 occurrence in {src_path}, found {src.count(needle)}"
+open(out_path, 'w').write(src.replace(needle, '', 1))
+PYX
+
+echo "regenerated: no-role-chain.ttl, no-transitive-parthood.ttl, no-feature-union.ttl, no-subproperty-containment.ttl, no-feature-object.ttl, no-selfpart-feature-and-informationobject.ttl, no-selfpart-process.ttl, no-quantity-unit-somevaluesfrom.ttl, no-participant-domain-and-inverse-range.ttl, no-object-process-disjoint.ttl"

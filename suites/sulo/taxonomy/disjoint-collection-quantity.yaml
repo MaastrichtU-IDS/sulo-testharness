@@ -1,0 +1,7 @@
+id: disjoint-collection-quantity
+description: Collection and Quantity are disjoint, so nothing can be both.
+data: data/collection-and-quantity.ttl
+prefixes:
+  ex: http://example.org/
+expect_inconsistent: true
+tags: [taxonomy, disjointness]

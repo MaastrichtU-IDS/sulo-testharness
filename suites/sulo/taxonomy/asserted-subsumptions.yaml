@@ -1,0 +1,23 @@
+id: asserted-subsumptions
+description: >-
+  All 15 asserted named rdfs:subClassOf axioms in sulo.ttl are still
+  entailed. Each is between two named classes; the restriction-bearing
+  subClassOf axioms (blank-node fillers) are covered separately under
+  suites/sulo/restrictions.
+entails: |
+  sulo:EndTime rdfs:subClassOf sulo:TimeInstant .
+  sulo:Capability rdfs:subClassOf sulo:Feature .
+  sulo:Collection rdfs:subClassOf sulo:InformationObject .
+  sulo:Quality rdfs:subClassOf sulo:Feature .
+  sulo:Role rdfs:subClassOf sulo:Feature .
+  sulo:SpatialObject rdfs:subClassOf sulo:Object .
+  sulo:StartTime rdfs:subClassOf sulo:TimeInstant .
+  sulo:TimeInterval rdfs:subClassOf sulo:Time .
+  sulo:Duration rdfs:subClassOf sulo:Time .
+  sulo:Quantity rdfs:subClassOf sulo:InformationObject .
+  sulo:Unit rdfs:subClassOf sulo:Quantity .
+  sulo:TimeInstant rdfs:subClassOf sulo:Time .
+  sulo:Time rdfs:subClassOf sulo:Quantity .
+  sulo:Feature rdfs:subClassOf sulo:Object .
+  sulo:InformationObject rdfs:subClassOf sulo:Feature .
+tags: [taxonomy, subsumption]

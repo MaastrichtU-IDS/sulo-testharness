@@ -1,0 +1,7 @@
+@prefix sulo: <https://w3id.org/sulo/> .
+@prefix ex:   <http://example.org/> .
+
+# Declared, but with no hasPart/isPartOf triple asserted about it: the
+# self-loops below must come purely from owl:ReflexiveProperty, not
+# from anything stated in this fixture.
+ex:x a sulo:Object .

@@ -1,0 +1,7 @@
+id: disjoint-time-unit
+description: Time and Unit are disjoint, so nothing can be both.
+data: data/time-and-unit.ttl
+prefixes:
+  ex: http://example.org/
+expect_inconsistent: true
+tags: [taxonomy, disjointness]

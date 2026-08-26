@@ -1,0 +1,11 @@
+id: non-covering-informationobject
+description: >-
+  SULO does NOT make InformationObject a disjoint union of Collection
+  and Quantity: this pins a deliberate absence. Someone "completing the
+  pattern" later by adding a third disjoint-union axiom over
+  InformationObject would break downstream data that relies on this
+  remaining unentailed.
+not_entails_manchester:
+  - sub_expr: "sulo:InformationObject"
+    sup_expr: "sulo:Collection or sulo:Quantity"
+tags: [taxonomy, covering, deliberate-absence]

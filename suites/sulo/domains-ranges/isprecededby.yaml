@@ -1,0 +1,13 @@
+id: isprecededby
+description: >-
+  isPrecededBy rdfs:domain sulo:Process, rdfs:range sulo:Process: a
+  bare isPrecededBy assertion entails both ends are Process. (Also
+  re-derivable from precedes' own domain/range plus the
+  owl:inverseOf link; see precedes.yaml's note.)
+data: data/isprecededby.ttl
+prefixes:
+  ex: http://example.org/
+entails: |
+  ex:a a sulo:Process .
+  ex:b a sulo:Process .
+tags: [domains-ranges]

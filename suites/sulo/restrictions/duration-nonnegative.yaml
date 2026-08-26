@@ -1,0 +1,11 @@
+id: duration-nonnegative
+description: >-
+  Duration rdfs:subClassOf (hasValue some xsd:decimal[>=0.0]), and
+  hasValue is functional. A Duration whose only permitted value is a
+  negative xsd:decimal cannot satisfy the someValuesFrom restriction
+  at all: the facet is enforced, and this one bites.
+data: data/duration-nonnegative.ttl
+prefixes:
+  ex: http://example.org/
+expect_inconsistent: true
+tags: [restrictions, facet]

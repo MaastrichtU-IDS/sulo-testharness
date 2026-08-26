@@ -84,31 +84,69 @@
 //! `classify_object_property_hierarchy`/`classify_data_property_hierarchy`'s
 //! materialised edges.
 //!
-//! Measured directly against this repository's four checked-in
-//! mutants (`mutants/README.md`): this closure catches exactly ONE of
-//! four. `no-subproperty-containment.ttl` is caught, via the property
-//! hierarchy above. `no-role-chain.ttl` is NOT caught:
-//! `materialize_subobjectproperty_axioms` explicitly skips a chain
-//! sub-expression, so a lost `owl:propertyChainAxiom` never reaches
-//! either hierarchy this closure reads. `no-transitive-parthood.ttl`
-//! is NOT caught: `owl:TransitiveProperty` is not a component kind
-//! either hierarchy matches, and removing it moves neither the class
-//! matrix nor the property edges. `no-feature-union.ttl` is NOT
-//! caught: it removes a `disjointUnionOf` covering axiom, but the four
-//! `rdfs:subClassOf sulo:Feature` edges it would otherwise imply are
-//! ALSO asserted directly elsewhere in SULO, and pairwise disjointness
-//! among the four survives in the redundant `owl:AllDisjointClasses`
-//! axiom, so nothing in the class matrix moves either. The other
-//! three mutants are caught by `tests/mutation.rs`'s case-based suite,
-//! a different, complementary defence layer; this golden closure does
-//! not duplicate that coverage and is not a substitute for it.
+//! Measured directly, by running `golden --ontology mutants/<X>.ttl
+//! --golden suites/sulo.golden` for each of the TEN checked-in
+//! mutants (`mutants/README.md`) and recording the exit code: this
+//! closure catches TWO of ten. The figure was "one of four" while
+//! only four mutants existed, and the six added since had never been
+//! measured against it; re-measure and restate this paragraph
+//! whenever a mutant is added, rather than reasoning about what the
+//! new one "should" do.
+//!
+//! CAUGHT (exit 4, drift):
+//!
+//! * `no-subproperty-containment.ttl`, via the property hierarchy
+//!   above: the two direct edges `hasPart ⊑ contains` and `isPartOf ⊑
+//!   isIn` disappear.
+//! * `no-feature-object.ttl`, via the class matrix: it deletes
+//!   `Feature ⊑ Object`, a NAMED-to-NAMED subsumption, which is
+//!   precisely the shape the class section records, and the deletion
+//!   fans out to 14 lost `subClassOf ... Object` rows.
+//!
+//! BLIND (exit 0, closure unmoved) to the other eight, in three
+//! groups:
+//!
+//! * `no-role-chain.ttl`:
+//!   `materialize_subobjectproperty_axioms` explicitly skips a chain
+//!   sub-expression, so a lost `owl:propertyChainAxiom` never reaches
+//!   either hierarchy this closure reads.
+//!   `no-transitive-parthood.ttl`: `owl:TransitiveProperty` is not a
+//!   component kind either hierarchy matches.
+//!   `no-participant-domain-and-inverse-range.ttl` (domains and
+//!   ranges) and `no-object-process-disjoint.ttl` (disjointness) are
+//!   both squarely on the structurally-blind list above.
+//! * `no-selfpart-feature-and-informationobject.ttl`,
+//!   `no-selfpart-process.ttl`, and
+//!   `no-quantity-unit-somevaluesfrom.ttl` each delete a
+//!   `rdfs:subClassOf` whose superclass is an ANONYMOUS restriction
+//!   (`hasPart only C`, `hasPart some Unit`). The class section
+//!   records named-class subsumption, satisfiability, and
+//!   equivalence; an anonymous superclass appears in none of those,
+//!   and removing these moves no named class's position and leaves
+//!   every named class satisfiable. This is the same class-only
+//!   limit as the rest, reached from restrictions rather than from
+//!   property axioms.
+//! * `no-feature-union.ttl` removes a `disjointUnionOf` covering
+//!   axiom, but the four `rdfs:subClassOf sulo:Feature` edges it
+//!   would otherwise imply are ALSO asserted directly elsewhere in
+//!   SULO, and pairwise disjointness among the four survives in the
+//!   redundant `owl:AllDisjointClasses` axiom, so nothing in the
+//!   class matrix moves either.
+//!
+//! All eight are caught by `tests/mutation.rs`'s case-based suite, a
+//! different, complementary defence layer; this golden closure does
+//! not duplicate that coverage and is not a substitute for it. No
+//! test pins the two-of-ten figure: it is a measurement of a
+//! sensitivity surface, not a property worth freezing, and a test
+//! asserting "this mutant is NOT caught" would have to be deleted the
+//! day the closure improves.
 //!
 //! DEFERRED (not built here): three of spec 5.2's five closure
 //! components, inferred class assertions, inferred property
 //! assertions, and inferred disjointness, are absent. That is where
-//! the other three mutants live. Closing that gap needs a fixed probe
-//! ABox, since `sulo.ttl` itself declares no individuals; that is a
-//! subsystem, not a fix, and belongs in the follow-on plan.
+//! most of the eight blind mutants live. Closing that gap needs a
+//! fixed probe ABox, since `sulo.ttl` itself declares no individuals;
+//! that is a subsystem, not a fix, and belongs in the follow-on plan.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

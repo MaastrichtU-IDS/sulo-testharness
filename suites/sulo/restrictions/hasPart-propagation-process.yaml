@@ -1,0 +1,12 @@
+id: hasPart-propagation-process
+description: >-
+  Process rdfs:subClassOf (hasPart only Process): a part of a Process
+  is itself entailed to be a Process, even though ex:part carries no
+  asserted type of its own.
+data: data/hasPart-propagation-process.ttl
+prefixes:
+  ex: http://example.org/
+instance_of_expr:
+  - individual: "ex:part"
+    expr: "sulo:Process"
+tags: [restrictions, hasPart-propagation]

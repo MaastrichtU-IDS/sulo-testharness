@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use sulo_testharness::load::load_file;
-use sulo_testharness::manifest::{Case, load_case};
+use sulo_testharness::manifest::{Case, CqSpec, load_case};
 use sulo_testharness::suite::{downgrade_for_loss, run_case};
 use sulo_testharness::verdict::{CheckOutcome, IndeterminateReason, Verdict};
 
@@ -10,6 +10,7 @@ fn o(v: Verdict) -> CheckOutcome {
     CheckOutcome {
         name: "c".into(),
         verdict: v,
+        rests_on_absence: false,
     }
 }
 
@@ -86,6 +87,7 @@ fn loss_downgrades_the_gates_missed_inconsistency() {
         verdict: Verdict::Fail(
             "expected inconsistent, but the reasoner found it consistent".into(),
         ),
+        rests_on_absence: false,
     }];
 
     downgrade_for_loss(&mut outs, &loss);
@@ -107,6 +109,7 @@ fn loss_downgrades_the_gates_found_consistent_pass() {
     let mut outs = vec![CheckOutcome {
         name: "gate: expected consistent".into(),
         verdict: Verdict::Pass,
+        rests_on_absence: false,
     }];
 
     downgrade_for_loss(&mut outs, &loss);
@@ -130,6 +133,7 @@ fn loss_does_not_downgrade_the_gates_found_inconsistent_outcomes() {
         CheckOutcome {
             name: "gate: expected inconsistent".into(),
             verdict: Verdict::Pass,
+            rests_on_absence: false,
         },
         CheckOutcome {
             name: "gate: expected consistent".into(),
@@ -138,6 +142,7 @@ fn loss_does_not_downgrade_the_gates_found_inconsistent_outcomes() {
                  below would pass vacuously. Remaining checks skipped."
                     .into(),
             ),
+            rests_on_absence: false,
         },
     ];
     let before: Vec<Verdict> = outs.iter().map(|o| o.verdict.clone()).collect();
@@ -148,6 +153,87 @@ fn loss_does_not_downgrade_the_gates_found_inconsistent_outcomes() {
     assert_eq!(
         before, after,
         "a gate outcome that found a clash must never be downgraded by loss"
+    );
+}
+
+// ---------------------------------------------------------------
+// downgrade_for_loss: the competency-question shapes, which carry no
+// `oracle::NO_PROOF_MARKER` and no `GATE_*` name and so are matched
+// through `CheckOutcome::rests_on_absence` instead. Both polarities,
+// because over-downgrading is its own defect: a CQ Pass with
+// `exact: false` and every cell bound asserts only that certain rows
+// are PRESENT, which loss (a strict subset of the axioms, hence a
+// subset of the closure) can never manufacture.
+// ---------------------------------------------------------------
+
+/// A `CheckOutcome` shaped exactly like one `cq::check_cq` builds:
+/// a `cq <query>` name, and the `rests_on_absence` flag `check_cq`
+/// would have computed for that verdict and spec.
+fn cq_outcome(verdict: Verdict, rests_on_absence: bool) -> CheckOutcome {
+    CheckOutcome {
+        name: "cq queries/who-participated.rq".into(),
+        verdict,
+        rests_on_absence,
+    }
+}
+
+#[test]
+fn loss_downgrades_a_cq_fail_and_an_absence_claiming_cq_pass() {
+    let loss = vec!["parse: 4 triples unconsumed".to_string()];
+    let mut outs = vec![
+        // A CQ Fail. Built by `rows::compare`, so its message carries
+        // no NO_PROOF_MARKER: without the flag this reads as a
+        // trustworthy ontology regression, when the row may simply
+        // have been suppressed by the dropped axiom.
+        cq_outcome(
+            Verdict::Fail("missing expected row: {?p = <http://example.org/alice>}".into()),
+            true,
+        ),
+        // A CQ Pass whose spec said `exact: true`, an "and no other
+        // rows" claim. Loss shrinks the closure, so a suppressed
+        // extra row makes that claim pass unearned.
+        cq_outcome(Verdict::Pass, true),
+    ];
+
+    downgrade_for_loss(&mut outs, &loss);
+
+    assert!(
+        matches!(
+            outs[0].verdict,
+            Verdict::Indeterminate(IndeterminateReason::AxiomLoss(_))
+        ),
+        "a CQ Fail may be a loss artifact and must downgrade, got {:?}",
+        outs[0].verdict
+    );
+    assert!(
+        matches!(
+            outs[1].verdict,
+            Verdict::Indeterminate(IndeterminateReason::AxiomLoss(_))
+        ),
+        "a CQ Pass making an absence claim must downgrade, got {:?}",
+        outs[1].verdict
+    );
+}
+
+#[test]
+fn loss_does_not_downgrade_a_monotone_safe_cq_pass() {
+    // `exact: false` with every expected cell bound, over a MONOTONE
+    // query, asserts only presence, which axiom loss cannot fake in
+    // the passing direction. Downgrading it would overstate the
+    // harness's uncertainty, the mirror image of the defect above.
+    // The monotonicity condition is not decided here: `check_cq`
+    // owns it (see `cq::query_is_monotone`, and the LIMIT and
+    // aggregate tests in `tests/cq.rs`), and this function sees only
+    // the flag it produced.
+    let loss = vec!["parse: 4 triples unconsumed".to_string()];
+    let mut outs = vec![cq_outcome(Verdict::Pass, false)];
+
+    downgrade_for_loss(&mut outs, &loss);
+
+    assert_eq!(
+        outs[0].verdict,
+        Verdict::Pass,
+        "a subset CQ Pass with no unbound cell is monotone-safe and must stay Pass"
     );
 }
 
@@ -175,6 +261,7 @@ fn base_case(id: &str) -> Case {
         instance_of_expr: vec![],
         satisfiable_expr: vec![],
         unsatisfiable: vec![],
+        cq: vec![],
         tags: vec![],
         timeout_ms: 30_000,
         base_dir: PathBuf::from("tests/fixtures"),
@@ -688,4 +775,246 @@ fn a_not_entails_fragment_with_no_triples_is_indeterminate_too() {
             result.checks
         );
     }
+}
+
+// ---------------------------------------------------------------
+// Task 5: wiring `cq:` into `run_case`. Four load-bearing rules,
+// tested in the order the task brief states them:
+//
+// 1. materialise ONCE per case, not once per competency question
+//    (`cq_two_specs_on_the_same_case_runs_both` proves both entries
+//    still run correctly and independently, which a per-question
+//    materialiser would also satisfy: a call count is not observable
+//    from outside `suite.rs`, so the COST claim itself is recorded as
+//    a wall-clock note in the task report, not a unit test);
+// 2. a gate stop must run zero CQ checks;
+// 3. a `MaterializeError` makes every CQ Indeterminate, not Fail;
+// 4. the deadline is `case.timeout_ms`, threaded exactly like every
+//    other check.
+//
+// `clean.ttl` (ex:A, ex:B rdfs:subClassOf ex:A, no individuals) is
+// deliberately small: `queries/subclass_of.rq` selects every
+// `?s rdfs:subClassOf ?o` pair, and the materialised closure over
+// this fixture contains exactly one such pair (no reasoner-inferred
+// subClassOf triples are added; step 2 of `materialize` only adds
+// rdf:type instance triples), so the expected row set is a single,
+// fully deterministic row: `{s: ex:B, o: ex:A}`.
+// ---------------------------------------------------------------
+
+fn cq_row(pairs: &[(&str, &str)]) -> BTreeMap<String, Option<String>> {
+    pairs
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), Some((*v).to_string())))
+        .collect()
+}
+
+fn subclass_of_spec(expect_rows: Vec<BTreeMap<String, Option<String>>>) -> CqSpec {
+    CqSpec {
+        query: PathBuf::from("queries/subclass_of.rq"),
+        expect_rows,
+        exact: true,
+        ordered: false,
+    }
+}
+
+fn classes_spec(expect_rows: Vec<BTreeMap<String, Option<String>>>) -> CqSpec {
+    CqSpec {
+        query: PathBuf::from("queries/classes.rq"),
+        expect_rows,
+        exact: true,
+        ordered: false,
+    }
+}
+
+#[test]
+fn cq_two_specs_on_the_same_case_runs_both() {
+    // Two DISTINCT queries, so each check gets its own name and
+    // cannot be confused with the other. One deliberately matches
+    // (Pass), the other deliberately does not (Fail): the strongest
+    // form of this test, since a bug that reused the first spec for
+    // every loop iteration (or dropped the second entirely) would
+    // either produce the wrong verdict under the wrong name or make
+    // one of the two `check_named` lookups panic outright.
+    let mut case = base_case("cq-two-specs");
+    case.ontology = Some(PathBuf::from("clean.ttl"));
+    case.cq = vec![
+        // subclass_of.rq: the one true row, s: ex:B, o: ex:A. Passes.
+        subclass_of_spec(vec![cq_row(&[("s", "ex:B"), ("o", "ex:A")])]),
+        // classes.rq: clean.ttl declares TWO classes (ex:A, ex:B),
+        // but this expects only ex:A under exact: true. Fails.
+        classes_spec(vec![cq_row(&[("c", "ex:A")])]),
+    ];
+
+    let result = run_case(&case, Path::new(UNUSED_DEFAULT));
+
+    assert_eq!(
+        result.checks.len(),
+        3,
+        "gate plus both cq checks should be present, got {:?}",
+        result.checks
+    );
+    assert_eq!(
+        check_named(&result, "cq queries/subclass_of.rq"),
+        &Verdict::Pass,
+        "the first spec's own check must pass on its own terms"
+    );
+    let second = check_named(&result, "cq queries/classes.rq");
+    assert!(
+        matches!(second, Verdict::Fail(_)),
+        "the second spec's own check must fail on its own terms, got {second:?}"
+    );
+    assert!(
+        matches!(result.verdict, Verdict::Fail(_)),
+        "one failing cq must fail the whole case, got {:?}",
+        result.verdict
+    );
+}
+
+#[test]
+fn a_matching_cq_yields_an_overall_pass() {
+    let mut case = base_case("cq-match");
+    case.ontology = Some(PathBuf::from("clean.ttl"));
+    case.cq = vec![subclass_of_spec(vec![cq_row(&[
+        ("s", "ex:B"),
+        ("o", "ex:A"),
+    ])])];
+
+    let result = run_case(&case, Path::new(UNUSED_DEFAULT));
+
+    assert_eq!(
+        result.checks.len(),
+        2,
+        "gate plus the one cq check should both be present, got {:?}",
+        result.checks
+    );
+    assert_eq!(result.verdict, Verdict::Pass, "got {:?}", result.checks);
+}
+
+#[test]
+fn a_mismatched_cq_yields_an_overall_fail() {
+    let mut case = base_case("cq-mismatch");
+    case.ontology = Some(PathBuf::from("clean.ttl"));
+    // ex:A is never a subject of rdfs:subClassOf in this fixture, so
+    // this expected row can never match the real answer.
+    case.cq = vec![subclass_of_spec(vec![cq_row(&[
+        ("s", "ex:A"),
+        ("o", "ex:B"),
+    ])])];
+
+    let result = run_case(&case, Path::new(UNUSED_DEFAULT));
+
+    assert_eq!(
+        result.checks.len(),
+        2,
+        "gate plus the one cq check should both be present, got {:?}",
+        result.checks
+    );
+    assert!(
+        matches!(result.verdict, Verdict::Fail(_)),
+        "a mismatched cq row must fail the case, got {:?}",
+        result.verdict
+    );
+    let cq_check = check_named(&result, "cq ");
+    assert!(
+        matches!(cq_check, Verdict::Fail(_)),
+        "the cq check itself must be the Fail, got {cq_check:?}"
+    );
+}
+
+#[test]
+fn a_case_with_both_entails_and_cq_runs_both() {
+    let mut case = base_case("cq-plus-entails");
+    case.ontology = Some(PathBuf::from("clean.ttl"));
+    case.entails = Some("ex:B rdfs:subClassOf ex:A .".into());
+    case.cq = vec![subclass_of_spec(vec![cq_row(&[
+        ("s", "ex:B"),
+        ("o", "ex:A"),
+    ])])];
+
+    let result = run_case(&case, Path::new(UNUSED_DEFAULT));
+
+    assert_eq!(
+        result.checks.len(),
+        3,
+        "gate, entails check, and cq check must all three be present, got {:?}",
+        result.checks
+    );
+    assert_eq!(result.verdict, Verdict::Pass, "got {:?}", result.checks);
+    assert_eq!(check_named(&result, "cq "), &Verdict::Pass);
+    assert_eq!(
+        check_named(&result, "Subsumption"),
+        &Verdict::Pass,
+        "the entails claim (ex:B rdfs:subClassOf ex:A) must also have run and passed"
+    );
+}
+
+#[test]
+fn a_gate_stop_runs_zero_cq_checks() {
+    let mut case = base_case("cq-gate-stop");
+    case.ontology = Some(PathBuf::from("inconsistent.ttl"));
+    case.expect_inconsistent = true;
+    // If materialisation or the cq loop ran anyway, this checks.len()
+    // assertion would catch it even if the cq check happened to
+    // "pass" vacuously against an inconsistent closure: the same
+    // reasoning the pre-existing gate tests use for entails.
+    case.cq = vec![subclass_of_spec(vec![cq_row(&[
+        ("s", "ex:B"),
+        ("o", "ex:A"),
+    ])])];
+
+    let result = run_case(&case, Path::new(UNUSED_DEFAULT));
+
+    assert!(
+        result.skipped,
+        "the gate stopped the case; the cq check must have been skipped"
+    );
+    assert_eq!(
+        result.checks.len(),
+        1,
+        "only the gate outcome should be present; the cq check must not have run, got {:?}",
+        result.checks
+    );
+}
+
+#[test]
+fn a_materialize_error_makes_every_cq_indeterminate_not_fail() {
+    // timeout_ms: 0 forces materialize's very first deadline check to
+    // fail immediately (the same zero-deadline seam
+    // oracle::holds_with_deadline already uses), so the store is never
+    // built. The gate itself is unbounded and ignores timeout_ms, so
+    // it still runs and passes; only the cq path is affected.
+    let mut case = base_case("cq-materialize-error");
+    case.ontology = Some(PathBuf::from("clean.ttl"));
+    case.timeout_ms = 0;
+    case.cq = vec![subclass_of_spec(vec![cq_row(&[
+        ("s", "ex:B"),
+        ("o", "ex:A"),
+    ])])];
+
+    let result = run_case(&case, Path::new(UNUSED_DEFAULT));
+
+    assert_eq!(
+        result.checks.len(),
+        2,
+        "gate plus the one cq check should both be present, got {:?}",
+        result.checks
+    );
+    let cq_check = check_named(&result, "cq ");
+    match cq_check {
+        Verdict::Indeterminate(IndeterminateReason::OracleError(msg)) => {
+            assert!(
+                msg.contains("time budget"),
+                "the reason should carry the MaterializeError text, got: {msg}"
+            );
+        }
+        other => panic!(
+            "a MaterializeError must make the cq check Indeterminate, never Fail, got {other:?}"
+        ),
+    }
+    assert!(
+        matches!(result.verdict, Verdict::Indeterminate(_)),
+        "the gate passes and the cq is Indeterminate, which outranks Pass, so the \
+         aggregate verdict must be Indeterminate too, got {:?}",
+        result.verdict
+    );
 }

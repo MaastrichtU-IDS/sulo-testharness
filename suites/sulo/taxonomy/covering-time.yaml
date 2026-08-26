@@ -1,0 +1,8 @@
+id: covering-time
+description: >-
+  The Time disjoint union covers its three members: Time is subsumed by
+  the union of Duration, TimeInstant, and TimeInterval.
+entails_manchester:
+  - sub_expr: "sulo:Time"
+    sup_expr: "sulo:Duration or sulo:TimeInstant or sulo:TimeInterval"
+tags: [taxonomy, covering]

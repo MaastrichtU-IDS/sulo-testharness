@@ -1,0 +1,12 @@
+id: isreferredtoin
+description: >-
+  isReferredToIn rdfs:range sulo:InformationObject: a bare
+  isReferredToIn assertion entails that the object is an
+  InformationObject. (isReferredToIn's rdfs:domain is owl:Thing,
+  vacuous, so only the range side gets a case.)
+data: data/isreferredtoin.ttl
+prefixes:
+  ex: http://example.org/
+entails: |
+  ex:d a sulo:InformationObject .
+tags: [domains-ranges]

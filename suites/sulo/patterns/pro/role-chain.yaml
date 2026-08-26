@@ -1,0 +1,16 @@
+id: role-chain
+description: >-
+  The PRO role chain fires: hasParticipant owl:propertyChainAxiom
+  (hasParticipant, inverseOf(hasFeature)), i.e. hasParticipant o
+  isFeatureOf -> hasParticipant. encounter hasParticipant
+  patient-role, patient-role isFeatureOf alice, therefore encounter
+  hasParticipant alice; likewise doctor-role/drsmith. Data adapted
+  from the paper's Figure 7; see ../README.md for the required
+  repairs.
+data: data/encounter.ttl
+prefixes:
+  ex: http://example.org/
+  obo: http://purl.obolibrary.org/obo/
+entails: |
+  ex:encounter sulo:hasParticipant ex:alice, ex:drsmith .
+tags: [pattern, pro]

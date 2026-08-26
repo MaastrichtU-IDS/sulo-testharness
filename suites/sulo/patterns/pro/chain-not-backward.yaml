@@ -1,0 +1,14 @@
+id: chain-not-backward
+description: >-
+  The PRO role chain only runs forward. hasParticipant's
+  propertyChainAxiom concludes NEW hasParticipant facts from existing
+  hasParticipant plus isFeatureOf facts; nothing in it lets alice
+  hasParticipant encounter be derived, even though encounter
+  hasParticipant alice is entailed (see role-chain.yaml).
+data: data/encounter.ttl
+prefixes:
+  ex: http://example.org/
+  obo: http://purl.obolibrary.org/obo/
+not_entails: |
+  ex:alice sulo:hasParticipant ex:encounter .
+tags: [pattern, pro, deliberate-absence]

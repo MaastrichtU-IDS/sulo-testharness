@@ -27,9 +27,57 @@ pub enum ManifestError {
     #[error(
         "manifest {path} asserts nothing: set at least one of entails, not_entails, \
          entails_manchester, not_entails_manchester, instance_of_expr, satisfiable_expr, \
-         unsatisfiable, or expect_inconsistent: true"
+         unsatisfiable, cq, or expect_inconsistent: true"
     )]
     NoAssertions { path: PathBuf },
+    #[error(
+        "manifest {path}: cq entry for query {query} sets ordered: true with \
+         exact: false, a combination spec 7.3 leaves undefined (it does not say \
+         whether an unmatched actual row may appear before, between, or only \
+         after the expected sequence). Use ordered: true, exact: true for an \
+         exact sequence, or ordered: false, exact: false for an unordered subset."
+    )]
+    CqOrderedNotExact { path: PathBuf, query: PathBuf },
+    #[error(
+        "manifest {path}: cq entry for query {query} has an empty expect_rows \
+         with exact: false, so it asserts nothing and passes whatever the query \
+         returns. Use exact: true to assert that the query returns no rows, or \
+         list the rows it must return."
+    )]
+    CqAssertsNothing { path: PathBuf, query: PathBuf },
+}
+
+/// One competency question: a SPARQL query plus the rows it must
+/// return.
+///
+/// `expect_rows` is a list of rows, each a map from variable name to
+/// an expected token. A YAML `null` means the variable must be
+/// UNBOUND in that row, which is different from the key being absent.
+///
+/// An expected row must name EVERY variable the query projects.
+/// `rows::compare` compares whole rows by `BTreeMap` equality, and
+/// `cq::check_cq` builds each actual row with a key per projected
+/// variable (bound or `None`), so a row that omits a projected
+/// variable has a smaller key set and can never match anything. An
+/// absent key is not "not compared"; it is a row that cannot match.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CqSpec {
+    pub query: PathBuf,
+    #[serde(default)]
+    pub expect_rows: Vec<BTreeMap<String, Option<String>>>,
+    /// `true` requires set equality with the actual rows. `false`
+    /// requires only that every expected row is present.
+    #[serde(default = "default_true")]
+    pub exact: bool,
+    /// `true` compares as a sequence. Only meaningful with an
+    /// `ORDER BY` in the query.
+    #[serde(default)]
+    pub ordered: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// One or many, so `data:` accepts a string or a list.
@@ -97,6 +145,8 @@ struct RawCase {
     #[serde(default)]
     unsatisfiable: Vec<String>,
     #[serde(default)]
+    cq: Vec<CqSpec>,
+    #[serde(default)]
     tags: Vec<String>,
     #[serde(default = "default_timeout")]
     timeout_ms: u64,
@@ -142,6 +192,7 @@ pub struct Case {
     pub instance_of_expr: Vec<InstanceExpr>,
     pub satisfiable_expr: Vec<String>,
     pub unsatisfiable: Vec<String>,
+    pub cq: Vec<CqSpec>,
     /// Free-form labels. Parsed and carried, but nothing reads them
     /// yet: the `--tag` case filter is deferred, so a tag today is
     /// documentation for a human reader, not a selector. Recorded here
@@ -191,11 +242,64 @@ pub fn load_case(path: &Path) -> Result<Case, ManifestError> {
         || !raw.not_entails_manchester.is_empty()
         || !raw.instance_of_expr.is_empty()
         || !raw.satisfiable_expr.is_empty()
-        || !raw.unsatisfiable.is_empty();
+        || !raw.unsatisfiable.is_empty()
+        || !raw.cq.is_empty();
     if !asserts_something {
         return Err(ManifestError::NoAssertions {
             path: path.to_path_buf(),
         });
+    }
+
+    // Two `cq` configurations cannot do their job, and both are
+    // decidable from the manifest alone, so they are refused HERE
+    // rather than at check time.
+    //
+    // Why load time and not `Indeterminate` from `cq::check_cq`:
+    //
+    // * Both are statically decidable, unlike the situations `cq.rs`
+    //   does route to `Indeterminate` (unreadable query file, parse
+    //   failure, execution failure, ASK, CONSTRUCT/DESCRIBE, a
+    //   failure part-way through the result stream, `ordered: true`
+    //   over a query with no `ORDER BY`, and a rejected `expect_rows`
+    //   token), each of which needs the `.rq` file read or the query
+    //   run. That list is enumerated rather than counted on purpose:
+    //   it was written here as "four" while `cq.rs` had seven exits,
+    //   and a stale count reads as a closed enumeration. `cq.rs`'s
+    //   module doc holds the authoritative list.
+    // * Exit code 2 is the documented meaning of "harness or
+    //   configuration error"; `Indeterminate` (exit 3) means the
+    //   reasoner could not answer, which is not what happened.
+    // * Fail-fast beats fail-at-check: the mistake is caught even
+    //   when the ontology itself fails to load, so the author is not
+    //   told about the ontology when the manifest is the problem.
+    // * One guard site instead of two. Doing both would make the
+    //   check-time branch unreachable, which is exactly the "a check
+    //   that cannot fail" shape this harness exists to refuse.
+    //
+    // `rows::compare` keeps its own `ordered && !exact` guard as
+    // defence-in-depth for direct library callers that never pass
+    // through a manifest; see that function's doc comment.
+    for spec in &raw.cq {
+        if spec.ordered && !spec.exact {
+            return Err(ManifestError::CqOrderedNotExact {
+                path: path.to_path_buf(),
+                query: spec.query.clone(),
+            });
+        }
+        // An empty `expect_rows` with `exact: false` makes
+        // `rows::compare` run an empty expected loop, skip the
+        // leftover check, and return `Ok(())` no matter what the
+        // query returned: a green check that cannot fail, which is
+        // the same mistake `NoAssertions` above exists to refuse, one
+        // level in. Empty `expect_rows` with `exact: true` is a
+        // legitimate "this query must return nothing" assertion and
+        // is deliberately still accepted.
+        if spec.expect_rows.is_empty() && !spec.exact {
+            return Err(ManifestError::CqAssertsNothing {
+                path: path.to_path_buf(),
+                query: spec.query.clone(),
+            });
+        }
     }
 
     Ok(Case {
@@ -213,6 +317,7 @@ pub fn load_case(path: &Path) -> Result<Case, ManifestError> {
         instance_of_expr: raw.instance_of_expr,
         satisfiable_expr: raw.satisfiable_expr,
         unsatisfiable: raw.unsatisfiable,
+        cq: raw.cq,
         tags: raw.tags,
         timeout_ms: raw.timeout_ms,
         base_dir: path.parent().unwrap_or(Path::new(".")).to_path_buf(),

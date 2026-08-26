@@ -1,0 +1,9 @@
+# A NON-monotone query: ORDER BY plus LIMIT. Losing ex:a from the
+# store would not shrink this answer, it would promote ex:c into the
+# window, so a subset expectation over it can be satisfied by loss.
+PREFIX sulo: <https://w3id.org/sulo/>
+SELECT ?o WHERE {
+  <http://example.org/a> sulo:isPartOf ?o
+}
+ORDER BY ?o
+LIMIT 2

@@ -1,0 +1,10 @@
+id: cq-empty-rows-exact
+description: >-
+  An empty expect_rows with exact: true is the legitimate "this query
+  must return nothing" assertion, and must keep loading. Guards the
+  empty-rows refusal against over-rejecting.
+data: data/parts.ttl
+cq:
+  - query: queries/who.rq
+    expect_rows: []
+    exact: true

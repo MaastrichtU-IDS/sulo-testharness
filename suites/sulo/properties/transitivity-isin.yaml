@@ -1,0 +1,10 @@
+id: transitivity-isin
+description: >-
+  isIn is transitive: a three-step chain a-b-c-d closes to the single
+  hop a isIn d.
+data: data/transitivity-isin.ttl
+prefixes:
+  ex: http://example.org/
+entails: |
+  ex:a sulo:isIn ex:d .
+tags: [properties, transitivity]

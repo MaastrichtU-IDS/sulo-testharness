@@ -1,0 +1,13 @@
+id: hasPart-propagation-informationobject
+description: >-
+  InformationObject rdfs:subClassOf (hasPart only InformationObject):
+  a part of an InformationObject is itself entailed to be an
+  InformationObject, even though ex:part carries no asserted type of
+  its own.
+data: data/hasPart-propagation-informationobject.ttl
+prefixes:
+  ex: http://example.org/
+instance_of_expr:
+  - individual: "ex:part"
+    expr: "sulo:InformationObject"
+tags: [restrictions, hasPart-propagation]

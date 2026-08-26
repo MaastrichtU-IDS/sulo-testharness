@@ -1,0 +1,7 @@
+@prefix ex: <http://example.org/> .
+@prefix sulo: <https://w3id.org/sulo/> .
+
+# hasParticipant's range is sulo:Object; typing the participant as
+# Process directly clashes, since Object owl:disjointWith Process.
+ex:p sulo:hasParticipant ex:o .
+ex:o a sulo:Process .

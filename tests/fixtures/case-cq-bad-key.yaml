@@ -1,0 +1,6 @@
+id: cq-typo
+description: Has a typo'd key inside the cq block.
+cq:
+  - query: queries/who.rq
+    expect_row:
+      - { p: "ex:alice" }

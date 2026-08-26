@@ -1,0 +1,8 @@
+id: timeinterval-haspart-some-duration
+description: >-
+  TimeInterval rdfs:subClassOf (hasPart some Duration): every
+  TimeInterval has a part that is a Duration.
+entails_manchester:
+  - sub_expr: "sulo:TimeInterval"
+    sup_expr: "sulo:hasPart some sulo:Duration"
+tags: [restrictions, somevaluesfrom]

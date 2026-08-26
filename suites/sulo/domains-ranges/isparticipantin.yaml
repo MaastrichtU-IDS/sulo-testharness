@@ -1,0 +1,13 @@
+id: isparticipantin
+description: >-
+  isParticipantIn rdfs:domain sulo:Object, rdfs:range sulo:Process: a
+  bare isParticipantIn assertion entails :o a Object and :p a
+  Process. isParticipantIn is owl:inverseOf hasParticipant; see
+  hasparticipant.yaml's note on the resulting redundancy.
+data: data/isparticipantin.ttl
+prefixes:
+  ex: http://example.org/
+entails: |
+  ex:o a sulo:Object .
+  ex:p a sulo:Process .
+tags: [domains-ranges]

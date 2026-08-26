@@ -1,0 +1,16 @@
+id: hasfeature
+description: >-
+  hasFeature rdfs:domain (Object or Process) [a union class], rdfs:range
+  sulo:Feature: a bare hasFeature assertion entails the object is a
+  Feature (a named class, checked via entails:) and the subject falls
+  in the anonymous union class (checked via instance_of_expr, since
+  there is no honest way to write membership in an anonymous union as
+  a ground Turtle triple; see spec 7.1).
+data: data/hasfeature.ttl
+prefixes:
+  ex: http://example.org/
+entails: |
+  ex:f a sulo:Feature .
+instance_of_expr:
+  - { individual: "ex:x", expr: "sulo:Object or sulo:Process" }
+tags: [domains-ranges]

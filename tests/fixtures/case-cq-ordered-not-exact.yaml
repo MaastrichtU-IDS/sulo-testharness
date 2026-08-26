@@ -1,0 +1,12 @@
+id: cq-ordered-not-exact
+description: >-
+  ordered: true with exact: false is undefined under spec 7.3, so
+  load_case must refuse it rather than let rows::compare report the
+  refusal as an ontology regression.
+data: data/parts.ttl
+cq:
+  - query: queries/values.rq
+    expect_rows:
+      - { v: '"37.8"^^xsd:double' }
+    exact: false
+    ordered: true

@@ -1,0 +1,8 @@
+id: quantity-haspart-some-unit
+description: >-
+  Quantity rdfs:subClassOf (hasPart some Unit): every Quantity has at
+  least one part that is a Unit.
+entails_manchester:
+  - sub_expr: "sulo:Quantity"
+    sup_expr: "sulo:hasPart some sulo:Unit"
+tags: [restrictions, somevaluesfrom]

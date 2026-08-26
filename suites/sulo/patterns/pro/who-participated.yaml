@@ -1,0 +1,19 @@
+id: who-participated
+description: >-
+  Competency question: who participated in the encounter? Recovers
+  both role holders (alice and drsmith) via the materialised PRO role
+  chain, joined against their external, non-imported
+  obo:NCBITaxon_9606 typing so the query returns the people
+  themselves, not the role individuals.
+data: data/encounter.ttl
+prefixes:
+  ex: http://example.org/
+  obo: http://purl.obolibrary.org/obo/
+cq:
+  - query: queries/who-participated.rq
+    expect_rows:
+      - { p: "ex:alice" }
+      - { p: "ex:drsmith" }
+    exact: true
+    ordered: false
+tags: [pattern, pro, cq]

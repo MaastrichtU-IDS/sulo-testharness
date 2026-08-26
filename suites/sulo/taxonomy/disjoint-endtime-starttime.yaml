@@ -1,0 +1,7 @@
+id: disjoint-endtime-starttime
+description: EndTime and StartTime are disjoint, so nothing can be both.
+data: data/endtime-and-starttime.ttl
+prefixes:
+  ex: http://example.org/
+expect_inconsistent: true
+tags: [taxonomy, disjointness]

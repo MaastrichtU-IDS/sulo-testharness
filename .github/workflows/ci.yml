@@ -3,7 +3,8 @@
 # Two tests in particular exist solely to prevent a "green while
 # testing nothing" failure and neither can run without this workflow:
 # `mutants_are_not_stale_against_current_sulo` (the sole guard against
-# the four mutants silently testing a frozen, stale copy of SULO) and
+# every mutant in `mutants/` silently testing a frozen, stale copy of
+# SULO) and
 # `the_committed_golden_file_matches_clean_sulo` (the only thing in the
 # repository that reads `suites/sulo.golden` at all).
 #

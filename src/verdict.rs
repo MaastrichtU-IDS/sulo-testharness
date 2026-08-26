@@ -49,6 +49,22 @@ impl Verdict {
 pub struct CheckOutcome {
     pub name: String,
     pub verdict: Verdict,
+    /// True when this outcome's meaning depends on something being
+    /// ABSENT from what the reasoner or the materialised store could
+    /// produce, rather than on something positively found.
+    ///
+    /// `suite::downgrade_for_loss` recognises the entailment-path
+    /// absence shapes structurally, from the verdict text
+    /// (`oracle::NO_PROOF_MARKER`) or the gate's own check name. The
+    /// competency-question path has neither: a `cq` verdict is built
+    /// by `rows::compare` over a materialised store, so its messages
+    /// carry no marker and its name is not a `GATE_*` constant. This
+    /// flag is how `cq` (or any future check kind with the same
+    /// problem) declares the dependency explicitly instead of hiding
+    /// it behind a string match on the check name, which would drift
+    /// the moment the name format changed. See `cq::check_cq` for
+    /// which competency-question outcomes set it and why.
+    pub rests_on_absence: bool,
 }
 
 /// Combine outcomes worst-first. An empty set passes.

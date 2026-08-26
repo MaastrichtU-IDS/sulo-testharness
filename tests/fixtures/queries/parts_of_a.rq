@@ -1,0 +1,4 @@
+PREFIX sulo: <https://w3id.org/sulo/>
+SELECT ?o WHERE {
+  <http://example.org/a> sulo:isPartOf ?o
+}

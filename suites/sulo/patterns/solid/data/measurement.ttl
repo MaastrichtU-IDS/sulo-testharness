@@ -1,0 +1,31 @@
+@prefix ex: <http://example.org/> .
+@prefix sulo: <https://w3id.org/sulo/> .
+@prefix obo: <http://purl.obolibrary.org/obo/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# Adapted from the SULO paper's Figure 4 (the SOLID pattern: hasValue
+# plus refersTo plus hasPart on a Quantity), with skolemised IRIs
+# standing in for the paper's blank nodes: rustdl's
+# inferred_object_property_values covers named individuals only, so a
+# blank-node unit or quality would be invisible to the CQ path (spec
+# 9.1). The unit is typed only obo:UO_0000027, exactly as the paper
+# does: deliberately left untyped as sulo:Unit or sulo:Feature,
+# because the point of the pattern is that Feature-hood (not
+# Unit-hood) is entailed, not asserted; see unit-forced-feature.yaml
+# and unit-not-forced-unit.yaml. Other deviations from the figure are
+# recorded in full in ../README.md, including one restored here per
+# fix-round review: alice hasFeature measurement, the fourth relation
+# the paper's own prose describes the pattern reusing, which an
+# earlier version of this fixture dropped entirely.
+
+ex:alice a sulo:Object ;
+    sulo:hasFeature ex:measurement .
+
+ex:measurement a sulo:Quantity ;
+    sulo:hasValue "170"^^xsd:decimal ;
+    sulo:hasPart ex:unit ;
+    sulo:refersTo ex:height-quality .
+
+ex:unit a obo:UO_0000027 .
+
+ex:height-quality a sulo:Quality .

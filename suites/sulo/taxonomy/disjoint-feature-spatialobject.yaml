@@ -1,0 +1,7 @@
+id: disjoint-feature-spatialobject
+description: Feature and SpatialObject are disjoint, so nothing can be both.
+data: data/feature-and-spatialobject.ttl
+prefixes:
+  ex: http://example.org/
+expect_inconsistent: true
+tags: [taxonomy, disjointness]

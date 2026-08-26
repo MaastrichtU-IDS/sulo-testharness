@@ -1,0 +1,12 @@
+id: hasPart-propagation-spatialobject
+description: >-
+  SpatialObject rdfs:subClassOf (hasPart only SpatialObject): a part
+  of a SpatialObject is itself entailed to be a SpatialObject, even
+  though ex:part carries no asserted type of its own.
+data: data/hasPart-propagation-spatialobject.ttl
+prefixes:
+  ex: http://example.org/
+instance_of_expr:
+  - individual: "ex:part"
+    expr: "sulo:SpatialObject"
+tags: [restrictions, hasPart-propagation]

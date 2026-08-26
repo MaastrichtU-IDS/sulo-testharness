@@ -1,0 +1,7 @@
+# A NON-monotone query: an aggregate. A smaller store does not remove
+# this row, it changes the value in it, so a subset expectation over
+# it can be satisfied by loss.
+PREFIX sulo: <https://w3id.org/sulo/>
+SELECT (COUNT(?o) AS ?n) WHERE {
+  <http://example.org/a> sulo:isPartOf ?o
+}

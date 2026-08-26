@@ -1,0 +1,6 @@
+@prefix sulo: <https://w3id.org/sulo/> .
+@prefix ex:   <http://example.org/> .
+
+ex:a sulo:isIn ex:b .
+ex:b sulo:isIn ex:c .
+ex:c sulo:isIn ex:d .

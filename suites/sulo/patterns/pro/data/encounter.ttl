@@ -1,0 +1,41 @@
+@prefix ex: <http://example.org/> .
+@prefix sulo: <https://w3id.org/sulo/> .
+@prefix obo: <http://purl.obolibrary.org/obo/> .
+
+# Adapted from the SULO paper's Figure 7 (the PRO pattern), NOT
+# transcribed verbatim: the paper's own listing is not valid Turtle
+# and would not parse as printed. Repairs and other deviations are
+# recorded in full in ../README.md; a summary:
+#   - namespace corrected from http://w3id.org/sulo/ to
+#     https://w3id.org/sulo/
+#   - the missing terminating dot on @prefix obo:, and the stray dot
+#     that orphaned the sulo:hasParticipant line, both fixed
+#   - taxon: is not used here (obo:NCBITaxon_9606 used directly
+#     instead; taxon: appears in the paper's own data lines,
+#     undeclared, not in its inference block)
+#   - the inferred subject renamed from :visit_1 to :encounter, to
+#     match the individual the data itself defines
+#   - the roles are typed sulo:Role IN ADDITION TO their original
+#     OMRSE classes (OMRSE_00000011, OMRSE_00000012), which are kept:
+#     OMRSE is not imported into sulo.ttl, so nothing makes them
+#     sulo:Role on its own, and Figure 5's pattern class expression
+#     needs that typing; see ../README.md for why (this is NOT about
+#     Figure 6's chain, which fires on the paper's data as printed)
+#   - alice and drsmith are typed sulo:SpatialObject, matching the
+#     paper, NOT sulo:Object: typing them Object directly would make
+#     "hasParticipant some Object" true from the ASSERTED data alone,
+#     which is exactly what pattern-membership.yaml exists to avoid;
+#     see ../README.md
+
+ex:encounter a sulo:Process, obo:OGMS_0000097 .
+
+ex:alice a obo:NCBITaxon_9606, sulo:SpatialObject .
+ex:drsmith a obo:NCBITaxon_9606, sulo:SpatialObject .
+
+ex:patient-role a sulo:Role, obo:OMRSE_00000011 ;
+    sulo:isFeatureOf ex:alice .
+
+ex:doctor-role a sulo:Role, obo:OMRSE_00000012 ;
+    sulo:isFeatureOf ex:drsmith .
+
+ex:encounter sulo:hasParticipant ex:patient-role, ex:doctor-role .

@@ -1,0 +1,8 @@
+id: timeinterval-hasdirectpart-some-endtime
+description: >-
+  TimeInterval rdfs:subClassOf (hasDirectPart some EndTime): every
+  TimeInterval has a direct part that is an EndTime.
+entails_manchester:
+  - sub_expr: "sulo:TimeInterval"
+    sup_expr: "sulo:hasDirectPart some sulo:EndTime"
+tags: [restrictions, somevaluesfrom]

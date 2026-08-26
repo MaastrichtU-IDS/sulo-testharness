@@ -1,0 +1,26 @@
+id: inverse-pairs
+description: >-
+  All 9 owl:inverseOf pairs in sulo.ttl hold in the backward direction:
+  atTime/isTimeOf, isPrecededBy/precedes, isReferredToIn/refersTo,
+  contains/isIn, hasFeature/isFeatureOf, hasItem/isItemIn,
+  hasParticipant/isParticipantIn, hasDirectPart/isDirectPartOf, and
+  hasPart/isPartOf. Only the forward direction is asserted per pair, in
+  data/inverse-pairs.ttl; only the backward triple is checked here, as
+  an entailment. The forward triple is deliberately NOT re-asserted
+  under entails: it is already directly stated in the data, so
+  entailing it again would test nothing and would cost a second
+  reasoner call for free.
+data: data/inverse-pairs.ttl
+prefixes:
+  ex: http://example.org/
+entails: |
+  ex:b1 sulo:isTimeOf ex:a1 .
+  ex:b2 sulo:precedes ex:a2 .
+  ex:b3 sulo:refersTo ex:a3 .
+  ex:b4 sulo:isIn ex:a4 .
+  ex:b5 sulo:isFeatureOf ex:a5 .
+  ex:b6 sulo:isItemIn ex:a6 .
+  ex:b7 sulo:isParticipantIn ex:a7 .
+  ex:b8 sulo:isDirectPartOf ex:a8 .
+  ex:b9 sulo:isPartOf ex:a9 .
+tags: [properties, inverse]

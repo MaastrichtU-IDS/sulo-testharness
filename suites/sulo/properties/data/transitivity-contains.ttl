@@ -1,0 +1,6 @@
+@prefix sulo: <https://w3id.org/sulo/> .
+@prefix ex:   <http://example.org/> .
+
+ex:a sulo:contains ex:b .
+ex:b sulo:contains ex:c .
+ex:c sulo:contains ex:d .

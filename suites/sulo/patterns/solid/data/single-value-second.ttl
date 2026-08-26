@@ -1,0 +1,7 @@
+@prefix ex: <http://example.org/> .
+@prefix sulo: <https://w3id.org/sulo/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# A second, distinct hasValue literal on the same measurement, on top
+# of the "170"^^xsd:decimal already asserted in data/measurement.ttl.
+ex:measurement sulo:hasValue "72"^^xsd:decimal .

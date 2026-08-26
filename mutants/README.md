@@ -1,12 +1,19 @@
 # Mutants
 
 Each `no-*.ttl` file is real, unmodified `../sulo/sulo.ttl` with exactly
-one axiom CONCEPT removed or weakened. "Concept", not "axiom": two of
-the four mutants remove BOTH halves of an inverse pair, because
-removing only one half is semantically inert (the untouched half plus
-the `owl:inverseOf` link fully re-derives the conclusion). See
-`no-transitive-parthood.ttl` and `no-subproperty-containment.ttl`
-below for the empirical traces. `tests/mutation.rs` asserts
+one axiom CONCEPT removed or weakened. "Concept", not "axiom": four of
+the ten mutants remove a PAIR of axioms, because removing either one
+alone is semantically inert. Three of those four are inverse pairs
+(the untouched half plus the `owl:inverseOf` link fully re-derives the
+conclusion): `no-transitive-parthood.ttl`,
+`no-subproperty-containment.ttl`, and
+`no-participant-domain-and-inverse-range.ttl`. The fourth,
+`no-selfpart-feature-and-informationobject.ttl`, is a different cause,
+subsumption-chain redundancy on a doubly-typed individual, not an
+inverse pair. The other six mutants are single-axiom deletions,
+each verified effective on its own. Every claim of inertness below is
+an empirical trace (`run_case` observed to return `Pass`, not `Fail`,
+on the narrower mutant), not an argument. `tests/mutation.rs` asserts
 that every mutant is caught by a specific named case, and that the
 same case passes on clean SULO.
 
@@ -112,10 +119,16 @@ reacts to that mutant, exactly as documented below.
 
 | File | Edit | Case that must fail |
 | --- | --- | --- |
-| `no-role-chain.ttl` | removes `owl:propertyChainAxiom` on `hasParticipant` | `suites/proof/role-chain.yaml` |
-| `no-transitive-parthood.ttl` | removes `owl:TransitiveProperty` from BOTH `isPartOf` and its inverse `hasPart`, keeps reflexivity on both | `suites/proof/transitivity-ispartof.yaml` |
-| `no-feature-union.ttl` | removes `Feature`'s `disjointUnionOf`, keeps its `AllDisjointClasses` | `suites/proof/covering-feature.yaml` only |
-| `no-subproperty-containment.ttl` | removes BOTH `isPartOf rdfs:subPropertyOf isIn` and its inverse-side counterpart `hasPart rdfs:subPropertyOf contains` | `suites/proof/subproperty-isin.yaml` |
+| `no-role-chain.ttl` | removes `owl:propertyChainAxiom` on `hasParticipant` | `suites/proof/role-chain.yaml`, `suites/sulo/patterns/pro/role-chain.yaml`, `suites/sulo/patterns/pro/pattern-membership.yaml`, `suites/sulo/patterns/pro/who-participated.yaml` |
+| `no-transitive-parthood.ttl` | removes `owl:TransitiveProperty` from BOTH `isPartOf` and its inverse `hasPart`, keeps reflexivity on both | `suites/proof/transitivity-ispartof.yaml`, `suites/sulo/properties/transitivity-ispartof.yaml`, `suites/sulo/properties/transitivity-haspart.yaml` |
+| `no-feature-union.ttl` | removes `Feature`'s `disjointUnionOf`, keeps its `AllDisjointClasses` | `suites/proof/covering-feature.yaml`, `suites/sulo/taxonomy/covering-feature.yaml`; the other three `suites/proof` cases must still pass on it |
+| `no-subproperty-containment.ttl` | removes BOTH `isPartOf rdfs:subPropertyOf isIn` and its inverse-side counterpart `hasPart rdfs:subPropertyOf contains` | `suites/proof/subproperty-isin.yaml`, `suites/sulo/properties/subproperty-axioms.yaml` |
+| `no-feature-object.ttl` | removes `Feature rdfs:subClassOf sulo:Object` (a single named-class axiom, not a blank-node restriction) | `suites/sulo/patterns/solid/typing-chain.yaml`, `suites/sulo/patterns/solid/value-quality-unit.yaml` |
+| `no-selfpart-feature-and-informationobject.ttl` | removes BOTH `Feature rdfs:subClassOf (hasPart only Feature)` and `InformationObject rdfs:subClassOf (hasPart only InformationObject)` | `suites/sulo/patterns/solid/unit-forced-feature.yaml`, `suites/sulo/restrictions/hasPart-propagation-feature.yaml`, `suites/sulo/restrictions/hasPart-propagation-informationobject.yaml` |
+| `no-selfpart-process.ttl` | removes `Process rdfs:subClassOf (hasPart only Process)` entirely (its only `rdfs:subClassOf` member) | `suites/sulo/restrictions/hasPart-propagation-process.yaml` |
+| `no-quantity-unit-somevaluesfrom.ttl` | removes `Quantity rdfs:subClassOf (hasPart some Unit)` | `suites/sulo/restrictions/quantity-haspart-some-unit.yaml` |
+| `no-participant-domain-and-inverse-range.ttl` | removes BOTH `hasParticipant rdfs:domain Process` and its inverse `isParticipantIn rdfs:range Process` | `suites/sulo/domains-ranges/hasparticipant.yaml`, `suites/sulo/domains-ranges/isparticipantin.yaml` |
+| `no-object-process-disjoint.ttl` | removes `Object owl:disjointWith Process`, the only Object/Process disjointness axiom in SULO | `suites/sulo/taxonomy/disjoint-object-process.yaml` |
 
 `no-role-chain.ttl` is not a naive `grep -v` of the
 `owl:propertyChainAxiom` line: that line is the last triple of the
@@ -134,6 +147,51 @@ still asserts pairwise disjointness (and, after the recovery above,
 actually reaches the reasoner). An earlier version of this table
 claimed otherwise, and was only ever right by accident, because
 horned-owl drops `AllDisjointClasses` silently.
+
+## `no-object-process-disjoint.ttl`: the first disjointness mutant
+
+The taxonomy group holds 14 disjointness counter-examples, and until
+this mutant they had ZERO committed mutant coverage. They were
+flip-verified during design with scratch mutants that were deleted
+before commit, so that verification was neither repeatable nor in CI,
+and the one taxonomy mutant that did exist (`no-feature-union.ttl`)
+asserts the opposite: that they must NOT react, because
+`AllDisjointClasses` keeps pairwise disjointness alive after the
+covering half is deleted. That left 21% of the suite, all one
+structural shape, resting on a claim that existed only in prose.
+
+Where the axiom lives, checked rather than assumed. Object/Process
+disjointness in `sulo.ttl` is one triple, `sulo:Object owl:disjointWith
+sulo:Process`, inside the `sulo:Object` statement. It is NOT covered by
+either `owl:AllDisjointClasses` list (those hold `{Capability,
+InformationObject, Quality, Role}` and `{Duration, TimeInstant,
+TimeInterval}`), and no `owl:disjointUnionOf` mentions the pair, so
+the `AllDisjointClasses` recovery described above does not apply here
+and nothing else re-asserts it.
+
+Whether one deletion suffices, checked empirically. There is a
+plausible route by which it could have been inert: `sulo:Object` also
+carries `rdfs:subClassOf [ owl:complementOf [ hasPart some Process ] ]`,
+and `sulo:hasPart` is `owl:ReflexiveProperty`, so an individual typed
+both `Object` and `Process` should have `x hasPart x` with `x` a
+`Process`, contradicting the complement. Observed behaviour of the
+pinned reasoner on the mutant says otherwise: `run_case` on
+`suites/sulo/taxonomy/disjoint-object-process.yaml` (whose data is a
+single individual typed both classes) returns
+
+    Fail("expected inconsistent, but the reasoner found it consistent; ...")
+
+so that route is not taken and the single deletion is effective. The
+same probe run across all 22 taxonomy cases showed exactly one
+reacting: every other case, including the other 13 disjointness
+counter-examples, kept its clean verdict (`Pass`, or `UnrefutedPass`
+for the three negative-expectation cases), confirming the edit did not
+spill into an unrelated axiom.
+
+This mutant proves the disjointness SHAPE is load-bearing and wired
+into CI for one pair. It does not prove it for the other 13 pairs
+individually; extending it is a matter of adding more mutants, not of
+reading this note as broader than it is.
 
 ## Recorded finding: SULO's parthood/containment axioms are mutually redundant across the inverse pair
 
@@ -170,9 +228,66 @@ redundancy is not a bug in SULO, and arguably a reasonable defensive
 choice, but it does mean a mutation-testing strategy that targets "one
 axiom" must know to target both sides of these two pairs together.
 
+## Task 10: extending coverage to the taxonomy/properties/restrictions/domains-ranges/patterns groups
+
+The four mutants above were built for the predecessor plan's `proof/`
+group and, before this task, caught nothing outside it: every suite
+group added since (taxonomy, properties, restrictions, domains-ranges,
+patterns/pro, patterns/solid) had zero caught mutants. This task closes
+that gap two ways: reusing three of the four existing mutants where
+they already exercise the identical axiom a new-group case depends on
+(see the table above; `no-role-chain.ttl`, `no-transitive-parthood.ttl`,
+`no-subproperty-containment.ttl`, and `no-feature-union.ttl` each now
+catch at least one case outside `proof/`, verified individually), and
+adding five brand-new mutants for axiom shapes the predecessor plan
+never touched: a single named-class `subClassOf`, a `hasPart
+only self` restriction pair, a standalone `hasPart only self`
+restriction, a `someValuesFrom` restriction, and a domain/inverse-range
+pair. Every group now has at least one caught mutant.
+
+`no-feature-object.ttl` corrects a diagnosis from Task 9's report,
+which claimed `patterns/solid/typing-chain` needed a concept-level
+(inverse-pair) mutant. It does not: `Feature rdfs:subClassOf
+sulo:Object` is a single, non-redundant named-class axiom (distinct
+from the two blank-node restrictions in the same
+`rdfs:subClassOf` list), and deleting it alone is sufficient, verified.
+
+`no-selfpart-feature-and-informationobject.ttl` needs both halves for
+the same reason `no-transitive-parthood.ttl` and
+`no-subproperty-containment.ttl` need both halves of their inverse
+pairs, but for a different underlying cause: not inverse-pair
+redundancy, but because the individual under test
+(`unit-forced-feature`'s measurement) is entailed both `Feature` and
+`InformationObject` at once via the typing chain, so either class's
+restriction alone still propagates Feature-hood onto its `hasPart`
+value. Verified during design (see `suites/sulo/patterns/solid/
+unit-forced-feature.yaml`'s own description) and re-verified here.
+The same mutant, not by design but discovered while verifying it,
+also catches `restrictions/hasPart-propagation-feature` and
+`restrictions/hasPart-propagation-informationobject` directly, since
+those two cases test exactly these two restrictions on their own.
+
+`no-participant-domain-and-inverse-range.ttl` is the domains-ranges
+counterpart to the two redundant-inverse-pair mutants above:
+`domains-ranges/README.md` documents, as a mutation finding from Task
+9, that `ObjectPropertyDomain`/`ObjectPropertyRange` on one member of
+an `owl:inverseOf` pair is re-derivable from the other member's
+domain/range plus the inverse axiom (standard OWL 2 DL model theory).
+A single-axiom deletion of `hasParticipant`'s own `rdfs:domain
+sulo:Process` is therefore inert; both it and `isParticipantIn`'s
+`rdfs:range sulo:Process` must go together. Verified to also catch
+`domains-ranges/isparticipantin.yaml`, not just `hasparticipant.yaml`,
+since both cases require the identical `?p a Process` fact, reached
+from opposite directions.
+
+Every `(mutant, case)` pair listed in the table above was verified
+individually: Pass on clean SULO and Fail on the mutant. This task
+found no new coverage hole: no mutant added here goes uncaught by the
+case it names.
+
 ## Regenerating after a SULO bump
 
-`./mutants/regenerate.sh` performs all four edits above from the
+`./mutants/regenerate.sh` performs all ten edits above from the
 repository root, reading `../sulo/sulo.ttl` and overwriting every file
 in this directory except `README.md` and itself. Run it whenever the
 sibling `sulo` repo advances.
@@ -184,7 +299,7 @@ in Rust, what each mutant file should contain from whatever
 mutant no longer matches. Without that check, a SULO edit could go
 unreflected in these files indefinitely: `assert_caught`'s "clean"
 half would read the new ontology while its "mutant" half kept reading
-a frozen old one, and all four `assert_caught` tests could stay green
+a frozen old one, and every `assert_caught` test could stay green
 while proving nothing about the ontology actually shipping, exactly
 the "green while testing nothing" failure mode this whole mechanism
 exists to catch, one level up from where it was originally built to

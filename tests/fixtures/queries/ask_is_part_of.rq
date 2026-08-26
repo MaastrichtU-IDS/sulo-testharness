@@ -1,0 +1,4 @@
+PREFIX sulo: <https://w3id.org/sulo/>
+ASK {
+  <http://example.org/a> sulo:isPartOf <http://example.org/b>
+}

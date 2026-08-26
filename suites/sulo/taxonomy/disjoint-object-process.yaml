@@ -1,0 +1,7 @@
+id: disjoint-object-process
+description: Object and Process are disjoint, so nothing can be both.
+data: data/object-and-process.ttl
+prefixes:
+  ex: http://example.org/
+expect_inconsistent: true
+tags: [taxonomy, disjointness]

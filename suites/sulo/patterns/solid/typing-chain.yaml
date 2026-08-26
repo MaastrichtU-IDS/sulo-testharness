@@ -1,0 +1,17 @@
+id: typing-chain
+description: >-
+  The entailed typing chain on the measurement individual: asserted
+  Quantity closes to InformationObject, Feature, and Object via
+  sulo.ttl's named subsumption chain (Quantity subClassOf
+  InformationObject subClassOf Feature subClassOf Object). This is
+  what makes the SOLID pattern's "predictable location for data
+  values" claim mean something: any consumer that only knows
+  something is an Object can still recover that it may carry a
+  hasValue, because the chain is guaranteed to close.
+data: data/measurement.ttl
+prefixes:
+  ex: http://example.org/
+  obo: http://purl.obolibrary.org/obo/
+entails: |
+  ex:measurement a sulo:InformationObject, sulo:Feature, sulo:Object .
+tags: [pattern, solid]

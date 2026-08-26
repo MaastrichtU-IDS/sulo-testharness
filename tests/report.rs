@@ -88,6 +88,7 @@ fn check(name: &str, verdict: Verdict) -> CheckOutcome {
     CheckOutcome {
         name: name.into(),
         verdict,
+        rests_on_absence: false,
     }
 }
 

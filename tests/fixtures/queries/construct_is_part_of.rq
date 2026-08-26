@@ -1,0 +1,3 @@
+PREFIX sulo: <https://w3id.org/sulo/>
+CONSTRUCT { ?s sulo:isPartOf ?o }
+WHERE { ?s sulo:isPartOf ?o }

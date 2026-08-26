@@ -1,0 +1,21 @@
+id: all-classes-satisfiable
+description: Every one of the 17 named classes in sulo.ttl is satisfiable.
+satisfiable_expr:
+  - "sulo:Capability"
+  - "sulo:Collection"
+  - "sulo:Duration"
+  - "sulo:EndTime"
+  - "sulo:Feature"
+  - "sulo:InformationObject"
+  - "sulo:Object"
+  - "sulo:Process"
+  - "sulo:Quality"
+  - "sulo:Quantity"
+  - "sulo:Role"
+  - "sulo:SpatialObject"
+  - "sulo:StartTime"
+  - "sulo:Time"
+  - "sulo:TimeInstant"
+  - "sulo:TimeInterval"
+  - "sulo:Unit"
+tags: [taxonomy, satisfiability]

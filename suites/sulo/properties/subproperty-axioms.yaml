@@ -1,0 +1,19 @@
+id: subproperty-axioms
+description: >-
+  The four non-trivial rdfs:subPropertyOf axioms among SULO's
+  parthood/containment properties still fire on asserted data. Each
+  pair of individuals is isolated to its own axiom so no pair's
+  inferred relations affect another's check: isDirectPartOf under
+  isPartOf, hasDirectPart under hasPart, and the two easily missed
+  ones, isPartOf under isIn and hasPart under contains. (isItemIn and
+  isIn are also subPropertyOf owl:topObjectProperty, but that is
+  trivially true of every object property and is not covered here.)
+data: data/subproperty-axioms.ttl
+prefixes:
+  ex: http://example.org/
+entails: |
+  ex:a1 sulo:isPartOf ex:b1 .
+  ex:a2 sulo:hasPart ex:b2 .
+  ex:a3 sulo:isIn ex:b3 .
+  ex:a4 sulo:contains ex:b4 .
+tags: [properties, subproperty]

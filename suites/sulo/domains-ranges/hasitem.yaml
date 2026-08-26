@@ -1,0 +1,11 @@
+id: hasitem
+description: >-
+  hasItem rdfs:domain sulo:Collection: a bare hasItem assertion
+  entails that the subject is a Collection. (hasItem's rdfs:range is
+  owl:Thing, vacuous, so only the domain side gets a case.)
+data: data/hasitem.ttl
+prefixes:
+  ex: http://example.org/
+entails: |
+  ex:c a sulo:Collection .
+tags: [domains-ranges]

@@ -1,0 +1,5 @@
+@prefix ex: <http://example.org/> .
+@prefix sulo: <https://w3id.org/sulo/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+ex:x sulo:hasValue "5"^^xsd:integer .
