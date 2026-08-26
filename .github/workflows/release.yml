@@ -90,13 +90,27 @@ jobs:
         run: |
           set -euo pipefail
           bin="target/${{ matrix.target }}/release/sulo-testharness"
-          file "$bin"
-          # ldd exits non-zero with "not a dynamic executable" on a static
-          # binary. A zero exit here means the musl build silently produced
-          # something that needs a loader on the consumer's machine.
-          if ldd "$bin" >/dev/null 2>&1; then
+          file_out=$(file "$bin")
+          echo "$file_out"
+          # NOT ldd's exit status. glibc's ldd prints "statically linked"
+          # and exits ZERO for a static-pie binary, which is exactly what
+          # this target produces, so an earlier version of this step read
+          # that success as proof of dynamic linking and failed the first
+          # real release on a correct build. The signal is the OUTPUT.
+          ldd_out=$(ldd "$bin" 2>&1 || true)
+          echo "$ldd_out"
+          # Negative: nothing may be dynamically linked, and ldd must not
+          # resolve any shared object (a real dynamic binary lists "=>").
+          if printf '%s' "$file_out" | grep -q "dynamically linked" \
+            || printf '%s' "$ldd_out" | grep -q "=>"; then
             echo "::error::${{ matrix.asset }} is dynamically linked; the whole point of the musl target is that it is not"
-            ldd "$bin"
+            exit 1
+          fi
+          # Positive: and it must affirmatively report as static, so a
+          # future `file` whose wording changes fails loudly here rather
+          # than passing because neither negative pattern matched.
+          if ! printf '%s' "$file_out" | grep -qE "static-pie linked|statically linked"; then
+            echo "::error::${{ matrix.asset }}: file() does not report a static binary: $file_out"
             exit 1
           fi
 
