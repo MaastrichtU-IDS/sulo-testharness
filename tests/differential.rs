@@ -30,11 +30,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use sulo_testharness::differential::{
-    Answer, Comparison, Probe, Provenance, Question, QuestionKind, ask, compare, questions,
+    Answer, Asked, Comparison, DifferentialOptions, DifferentialOutcome, Origin, Probe, Provenance,
+    Question, QuestionKind, ask, compare, differential_exit_code, explain_agreement,
+    explain_divergence, no_questions_refusal, questions, run_differential,
 };
 use sulo_testharness::hermit::HermitAnswer;
-use sulo_testharness::manifest::{Case, SubsumptionExpr};
-use sulo_testharness::suite::{GATE_EXPECT_CONSISTENT, run_case};
+use sulo_testharness::manifest::{Case, InstanceExpr, SubsumptionExpr};
+use sulo_testharness::oracle::NO_PROOF_MARKER;
+use sulo_testharness::suite::{GATE_EXPECT_CONSISTENT, run_case, select};
 use sulo_testharness::verdict::{CheckOutcome, IndeterminateReason, Verdict};
 
 const SULO: &str = "../sulo/sulo.ttl";
@@ -524,6 +527,7 @@ fn question(kind: QuestionKind, rustdl: Option<Answer>) -> Question {
             case_id: "c".to_string(),
             check: "k".to_string(),
             asked: "q".to_string(),
+            origin: Origin::Unrefuted,
         },
         kind,
         rustdl,
@@ -990,5 +994,612 @@ fn the_data_range_case_diverges() {
             assert_eq!(hermit, Answer::Inconsistent);
         }
         other => panic!("the two reasoners really do disagree here, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------
+// 5: ruling 7. The positive assertions rustdl could not prove.
+// ---------------------------------------------------------------
+//
+// `oracle::verdict_for` tells the reader, on a positive assertion
+// that found no proof, "Incompleteness is a possible cause; the CI
+// differential settles it". That Fail rests on an absence of proof
+// exactly as a negative `UnrefutedPass` does. If the differential
+// never asks about it, that sentence ships as a falsehood, so these
+// tests are what keep `oracle.rs`'s promise honest.
+
+/// A positive assertion rustdl PROVED needs no oracle of record, and
+/// must not produce a question.
+///
+/// Half of ruling 7's membership rule, and the half that would go
+/// unnoticed if it broke: asking HermiT to confirm every proof rustdl
+/// already found would multiply the CI job's runtime by the size of
+/// the suite while establishing nothing soundness had not already
+/// established.
+#[test]
+fn a_passing_positive_assertion_yields_no_question() {
+    let mut case = blank_case("passing-positive");
+    case.entails_manchester = vec![SubsumptionExpr {
+        // Asserted in SULO, so rustdl proves it.
+        sub_expr: "sulo:TimeInterval".to_string(),
+        sup_expr: "sulo:Time".to_string(),
+    }];
+
+    let result = run_case(&case, sulo());
+    let check = "sulo:TimeInterval subClassOf sulo:Time";
+    assert!(
+        result
+            .checks
+            .iter()
+            .any(|c| c.name == check && c.verdict == Verdict::Pass),
+        "the fixture must really PASS, or this test proves nothing: {:?}",
+        result.checks
+    );
+
+    let qs = questions(&case, sulo(), &result.checks);
+    assert_eq!(
+        qs.len(),
+        1,
+        "a proved positive needs no oracle of record, so the gate is the only question: \
+         {:?}",
+        qs.iter().map(|q| &q.provenance.check).collect::<Vec<_>>()
+    );
+    assert_eq!(qs[0].provenance.origin, Origin::Gate);
+}
+
+/// Every positive shape that can produce a `NO_PROOF_MARKER` Fail
+/// produces a question, under the same check name the `run` report
+/// used, carrying rustdl's absence-of-proof answer.
+///
+/// All four shapes in one case, because the failure mode is per-shape:
+/// a name format that drifts, or a loop someone forgets to add,
+/// silently drops that shape from the differential and leaves its
+/// `Fail` message promising a cross-check that never happens.
+#[test]
+fn every_failing_positive_shape_becomes_a_question() {
+    let mut case = blank_case("failing-positives");
+    case.base_dir = PathBuf::from("suites/sulo/patterns/solid");
+    case.data = vec![PathBuf::from("data/measurement.ttl")];
+    case.prefixes = ex_prefixes();
+    // None of these four holds in SULO, so each is a Fail resting on
+    // an absence of proof.
+    case.entails = Some("sulo:Object rdfs:subClassOf sulo:Process .\n".to_string());
+    case.entails_manchester = vec![SubsumptionExpr {
+        sub_expr: "sulo:Object".to_string(),
+        sup_expr: "sulo:Feature".to_string(),
+    }];
+    case.instance_of_expr = vec![InstanceExpr {
+        individual: "ex:alice".to_string(),
+        expr: "sulo:Process".to_string(),
+    }];
+    case.unsatisfiable = vec!["sulo:Object".to_string()];
+
+    let result = run_case(&case, sulo());
+
+    // The premise: every one of the four really is a
+    // NO_PROOF_MARKER Fail in the `run` report. Without this the
+    // assertions below could pass over a case that failed for some
+    // other reason entirely.
+    let unproven: BTreeSet<&str> = result
+        .checks
+        .iter()
+        .filter(|c| matches!(&c.verdict, Verdict::Fail(m) if m.contains(NO_PROOF_MARKER)))
+        .map(|c| c.name.as_str())
+        .collect();
+    assert_eq!(
+        unproven.len(),
+        4,
+        "the fixture must produce exactly four absence-resting Fails, or ruling 7 is \
+         being tested against the wrong thing: {:?}",
+        result.checks
+    );
+
+    let qs = questions(&case, sulo(), &result.checks);
+    let positives: BTreeMap<&str, &Question> = qs
+        .iter()
+        .filter(|q| q.provenance.origin == Origin::FailingPositive)
+        .map(|q| (q.provenance.check.as_str(), q))
+        .collect();
+
+    assert_eq!(
+        positives.keys().copied().collect::<BTreeSet<_>>(),
+        unproven,
+        "every positive assertion rustdl could not prove must become a question, under \
+         the same check name the run report used"
+    );
+
+    for (check, q) in &positives {
+        assert_eq!(
+            q.rustdl,
+            Some(Answer::NotEntailed),
+            "rustdl's answer for {check} is an absence of proof, and must be recorded as \
+             one: comparing it as anything else would manufacture agreement"
+        );
+        assert_eq!(q.kind, QuestionKind::Entailment);
+        assert!(
+            !matches!(q.probe, Probe::None),
+            "{check} must carry a probe: a Probe::None here would ask HermiT a plain \
+             consistency question and compare its answer against an entailment"
+        );
+    }
+}
+
+/// Ruling 7's membership rule is `NO_PROOF_MARKER`, not "any Fail",
+/// and not "any check with this name".
+///
+/// Driven with a synthetic `CheckOutcome` per verdict shape rather
+/// than with real SULO, because real SULO cannot reach four of the
+/// five rows: every one of the four positive shapes goes through
+/// `oracle::verdict_for` with `Expectation::Entailed`, whose only Fail
+/// carries the marker. So the discriminating cases have to be
+/// constructed.
+///
+/// That is not an argument for dropping the marker test from
+/// `unproven`. It is an argument for having THIS test: the first
+/// version of the test below used a `not_entails_manchester` entry and
+/// a real run, and widening `unproven` to `Verdict::Fail(_)` left it
+/// green, because the ruling 7 loops never look at
+/// `not_entails_manchester` at all. A check that could not fail,
+/// caught by mutating the code rather than by reading it.
+#[test]
+fn only_a_fail_resting_on_absence_of_proof_becomes_a_question() {
+    let mut case = blank_case("membership");
+    case.entails_manchester = vec![SubsumptionExpr {
+        sub_expr: "sulo:Object".to_string(),
+        sup_expr: "sulo:Process".to_string(),
+    }];
+    let check = "sulo:Object subClassOf sulo:Process";
+
+    let rows: [(&str, Verdict, bool); 5] = [
+        (
+            "a Fail resting on an absence of proof: the whole point of ruling 7",
+            Verdict::Fail(format!("expected to hold, but {NO_PROOF_MARKER}: {check}.")),
+            true,
+        ),
+        (
+            "a Fail resting on a clash the reasoner EXHIBITED, which soundness vouches \
+             for and which needs no oracle of record",
+            Verdict::Fail(format!("expected NOT to hold, but it does: {check}")),
+            false,
+        ),
+        (
+            "a Pass is a proof; asking HermiT to confirm a proof is not what the oracle \
+             of record is for",
+            Verdict::Pass,
+            false,
+        ),
+        (
+            "an Indeterminate is an answer rustdl never gave, and must never be \
+             compared as though it had",
+            Verdict::Indeterminate(IndeterminateReason::Timeout),
+            false,
+        ),
+        (
+            "an UnrefutedPass cannot arise for a positive assertion, and if it somehow \
+             does it is not a Fail to reinterpret",
+            Verdict::UnrefutedPass,
+            false,
+        ),
+    ];
+
+    for (why, verdict, expected) in rows {
+        let checks = vec![CheckOutcome {
+            name: check.to_string(),
+            verdict,
+            rests_on_absence: false,
+        }];
+        let got = questions(&case, sulo(), &checks)
+            .iter()
+            .any(|q| q.provenance.origin == Origin::FailingPositive);
+        assert_eq!(got, expected, "{why}");
+    }
+
+    // And a check nobody recorded under that name is not a question
+    // either: a name drift must leave the differential silent here
+    // rather than inventing an answer rustdl never gave.
+    let got = questions(&case, sulo(), &[])
+        .iter()
+        .any(|q| q.provenance.origin == Origin::FailingPositive);
+    assert!(
+        !got,
+        "no recorded check means no rustdl verdict to reinterpret"
+    );
+}
+
+/// The loops are over the POSITIVE fields. A negative assertion stays
+/// a negative assertion, whatever its verdict.
+#[test]
+fn a_refuted_negative_is_not_a_failing_positive() {
+    let mut case = blank_case("refuted-negative");
+    case.not_entails_manchester = vec![SubsumptionExpr {
+        // SULO DOES assert this, so the negative expectation is
+        // refuted: a trustworthy Fail, no marker.
+        sub_expr: "sulo:TimeInterval".to_string(),
+        sup_expr: "sulo:Time".to_string(),
+    }];
+
+    let result = run_case(&case, sulo());
+    let check = "sulo:TimeInterval subClassOf sulo:Time";
+    let verdict = &result
+        .checks
+        .iter()
+        .find(|c| c.name == check)
+        .expect("the check ran")
+        .verdict;
+    match verdict {
+        Verdict::Fail(msg) => assert!(
+            !msg.contains(NO_PROOF_MARKER),
+            "this Fail must rest on a proof, not on its absence: {msg}"
+        ),
+        other => panic!("the fixture must really Fail, got {other:?}"),
+    }
+
+    let qs = questions(&case, sulo(), &result.checks);
+    let q = qs
+        .iter()
+        .find(|q| q.provenance.check == check)
+        .expect("the negative assertion is still asked");
+    assert_eq!(
+        q.provenance.origin,
+        Origin::Unrefuted,
+        "this question comes from `not_entails_manchester`, not from ruling 7's positive \
+         half"
+    );
+    assert_eq!(
+        qs.iter()
+            .filter(|q| q.provenance.origin == Origin::FailingPositive)
+            .count(),
+        0,
+        "a refuted negative rests on a clash the reasoner found, so it is not a failing \
+         positive"
+    );
+}
+
+/// The probe a ruling 7 question carries is BYTE FOR BYTE the probe
+/// the same claim would get as a negative assertion.
+///
+/// The two paths ask HermiT the same question and differ only in what
+/// the answer MEANS to the reader, so they must not differ in the
+/// probe. Pinned as an identity rather than as another copy of the
+/// expected Turtle, because the encodings are already pinned
+/// character for character in section 1: what could still go wrong
+/// here is the positive path building a probe with `sub` and `sup` the
+/// wrong way round, which would be a probe that answers a question
+/// nobody asked and which no real-HermiT control in this file would
+/// catch (against the fixture where HermiT proves the entailment, the
+/// ontology is inconsistent, so ANY probe comes back INCONSISTENT).
+#[test]
+fn a_failing_positive_carries_the_same_probe_as_the_negative_of_the_same_claim() {
+    let sub = "sulo:Object";
+    let sup = "sulo:Process";
+    let check = format!("{sub} subClassOf {sup}");
+
+    let mut positive = blank_case("probe-identity-positive");
+    positive.entails_manchester = vec![SubsumptionExpr {
+        sub_expr: sub.to_string(),
+        sup_expr: sup.to_string(),
+    }];
+    let checks = vec![CheckOutcome {
+        name: check.clone(),
+        verdict: Verdict::Fail(format!("expected to hold, but {NO_PROOF_MARKER}: {check}.")),
+        rests_on_absence: false,
+    }];
+
+    let mut negative = blank_case("probe-identity-negative");
+    negative.not_entails_manchester = vec![SubsumptionExpr {
+        sub_expr: sub.to_string(),
+        sup_expr: sup.to_string(),
+    }];
+
+    let from_positive = questions(&positive, sulo(), &checks);
+    let from_positive = from_positive
+        .iter()
+        .find(|q| q.provenance.origin == Origin::FailingPositive)
+        .expect("ruling 7 produces a question here");
+    let from_negative = questions(&negative, sulo(), &[]);
+    let from_negative = from_negative
+        .iter()
+        .find(|q| q.provenance.origin == Origin::Unrefuted)
+        .expect("the negative assertion is asked");
+
+    assert_eq!(
+        turtle(&from_positive.probe),
+        turtle(&from_negative.probe),
+        "the two paths must put the SAME question to HermiT; only its meaning to the \
+         reader differs"
+    );
+    assert_eq!(from_positive.kind, from_negative.kind);
+}
+
+/// Ruling 7, direction one, against a real HermiT: HermiT finds no
+/// proof either, so the two reasoners AGREE and the `Fail` the `run`
+/// subcommand reports is a genuine regression in the ontology.
+///
+/// `sulo:Object subClassOf sulo:Process` is not entailed by SULO (the
+/// two are disjoint and `Object` is satisfiable), so neither reasoner
+/// can prove it. The report has to SAY that, because `oracle`'s Fail
+/// message explicitly defers the question here.
+#[test]
+fn a_failing_positive_both_reasoners_cannot_prove_agrees() {
+    let Some(robot) = jar() else { return };
+
+    let mut case = blank_case("failing-positive-agree");
+    case.entails_manchester = vec![SubsumptionExpr {
+        sub_expr: "sulo:Object".to_string(),
+        sup_expr: "sulo:Process".to_string(),
+    }];
+
+    let result = run_case(&case, sulo());
+    let qs = questions(&case, sulo(), &result.checks);
+    let q = qs
+        .iter()
+        .find(|q| q.provenance.origin == Origin::FailingPositive)
+        .expect("ruling 7 must produce a question for this Fail");
+
+    let hermit = ask(&robot, q, &workdir("positive-agree"));
+    assert_eq!(
+        hermit,
+        HermitAnswer::Consistent,
+        "the probe `Object and not Process` must have a model: an INCONSISTENT here \
+         would mean the probe is asking something else"
+    );
+
+    match compare(q, &hermit) {
+        Comparison::Agree { answer } => {
+            assert_eq!(answer, Answer::NotEntailed);
+            let note = explain_agreement(Origin::FailingPositive, answer)
+                .expect("an agreement on a failing positive must be explained");
+            assert!(
+                note.contains("genuine regression"),
+                "the note must tell the reader the Fail is real: {note}"
+            );
+        }
+        other => panic!("both reasoners fail to prove this, so they agree, got {other:?}"),
+    }
+}
+
+/// Ruling 7, direction two, and the signal spec 5.3 calls the most
+/// valuable either reasoner could produce: HermiT DOES find the proof
+/// rustdl could not, so the `Fail` the `run` subcommand reports is a
+/// rustdl INCOMPLETENESS rather than a SULO regression.
+///
+/// Built on the one gap that really exists: with
+/// `timeinstant-datarange.ttl` merged in, the ontology is inconsistent
+/// (a `TimeInstant` with an `xsd:string` value violates the data-range
+/// `allValuesFrom`), so HermiT entails everything, including
+/// `Object subClassOf Process`. rustdl cannot see that axiom at all,
+/// reports the ontology consistent, and then fails to prove the
+/// subsumption.
+///
+/// Without this test the positive half of the question set could be
+/// wired to a probe that can never clash, and every failing positive
+/// in the suite would come back "agreed", which is the exact defect
+/// shape this project keeps finding.
+#[test]
+fn a_failing_positive_hermit_can_prove_diverges_and_names_rustdl() {
+    let Some(robot) = jar() else { return };
+
+    let mut case = blank_case("failing-positive-diverge");
+    case.base_dir = PathBuf::from("suites/sulo/restrictions");
+    case.data = vec![PathBuf::from("data/timeinstant-datarange.ttl")];
+    case.prefixes = ex_prefixes();
+    case.entails_manchester = vec![SubsumptionExpr {
+        sub_expr: "sulo:Object".to_string(),
+        sup_expr: "sulo:Process".to_string(),
+    }];
+
+    let result = run_case(&case, sulo());
+    let qs = questions(&case, sulo(), &result.checks);
+    let q = qs
+        .iter()
+        .find(|q| q.provenance.origin == Origin::FailingPositive)
+        .expect("ruling 7 must produce a question for this Fail");
+    assert_eq!(
+        q.rustdl,
+        Some(Answer::NotEntailed),
+        "rustdl found no proof, which is the whole premise"
+    );
+
+    let hermit = ask(&robot, q, &workdir("positive-diverge"));
+    assert_eq!(
+        hermit,
+        HermitAnswer::Inconsistent,
+        "HermiT sees the data-range violation, so it entails everything"
+    );
+
+    match compare(q, &hermit) {
+        Comparison::Divergence {
+            question,
+            rustdl,
+            hermit,
+        } => {
+            assert_eq!(rustdl, Answer::NotEntailed);
+            assert_eq!(hermit, Answer::Entailed);
+            let note = explain_divergence(question.origin, rustdl, hermit);
+            assert!(
+                note.contains("rustdl is the outlier") && note.contains("INCOMPLETENESS"),
+                "the note must name the outlier and the defect: {note}"
+            );
+            assert!(
+                note.contains("AGAINST a SULO regression"),
+                "the note must say what this means for the run report's Fail: {note}"
+            );
+        }
+        other => panic!(
+            "HermiT proves what rustdl cannot, which is a Divergence, got {other:?}. An \
+             Agree here would mean the probe cannot clash"
+        ),
+    }
+}
+
+/// The other direction of `explain_divergence`, which no fixture in
+/// this repository can produce: rustdl claiming a proof HermiT
+/// refutes. That would be an UNSOUNDNESS, and it must not be reported
+/// with the reassuring incompleteness wording.
+#[test]
+fn a_proof_hermit_refutes_is_reported_as_unsoundness() {
+    let note = explain_divergence(Origin::Unrefuted, Answer::Entailed, Answer::NotEntailed);
+    assert!(
+        note.contains("UNSOUNDNESS") && note.contains("rustdl is the outlier"),
+        "the alarming direction must be named as such: {note}"
+    );
+    assert!(
+        !note.contains("INCOMPLETENESS"),
+        "an unsoundness must not be described as an incompleteness: {note}"
+    );
+}
+
+// ---------------------------------------------------------------
+// 6: ruling 8. Nothing asked is not everything agreed.
+// ---------------------------------------------------------------
+
+/// The refusal itself, as a message.
+#[test]
+fn a_run_that_asked_nothing_is_refused_by_name() {
+    let msg = no_questions_refusal(Path::new("suites/sulo"), 3, Some("nothing"));
+    assert!(
+        msg.contains("NO questions") && msg.contains("Nothing asked is not everything agreed"),
+        "the refusal must say what went wrong and why it is not a pass: {msg}"
+    );
+    assert!(
+        msg.contains("suites/sulo") && msg.contains("\"nothing\""),
+        "the refusal must name the suite and the filter: {msg}"
+    );
+}
+
+/// The other half of ruling 8, and the honest one: the guard above
+/// CANNOT fire against this repository, because every case yields at
+/// least its consistency-gate question.
+///
+/// Pinned rather than left implicit. If someone ever makes the gate
+/// question conditional, this test fails and points at the guard that
+/// then starts mattering, instead of the guard silently becoming
+/// load-bearing with nobody having tested it.
+#[test]
+fn every_case_in_the_real_suite_yields_at_least_the_gate_question() {
+    let selected =
+        select(Path::new("suites/sulo"), Some(sulo()), None).expect("the SULO suite selects");
+    assert!(!selected.is_empty(), "the suite is not empty");
+    for (case, path) in &selected {
+        // No rustdl answers passed: the question COUNT must not depend
+        // on them, only which of them carry an answer.
+        let qs = questions(case, sulo(), &[]);
+        assert!(
+            !qs.is_empty(),
+            "{} yields no questions, so a --filter selecting only it would reach \
+             ruling 8's refusal. That guard is untested against a real case; go read \
+             differential::no_questions_refusal",
+            path.display()
+        );
+        assert_eq!(
+            qs[0].provenance.origin,
+            Origin::Gate,
+            "{} must ask its consistency gate first",
+            case.id
+        );
+    }
+}
+
+// ---------------------------------------------------------------
+// 7: the run's exit code.
+// ---------------------------------------------------------------
+
+fn asked_with(comparison: Comparison) -> Asked {
+    Asked {
+        provenance: Provenance {
+            case_id: "c".to_string(),
+            check: "k".to_string(),
+            asked: "q".to_string(),
+            origin: Origin::Gate,
+        },
+        comparison,
+    }
+}
+
+/// All four rows, including the one that matters most: a divergence
+/// buried among agreements still exits 5.
+#[test]
+fn the_exit_code_ranks_divergence_above_everything() {
+    let agree = asked_with(Comparison::Agree {
+        answer: Answer::Consistent,
+    });
+    let diverge = asked_with(Comparison::Divergence {
+        question: Provenance {
+            case_id: "c".to_string(),
+            check: "k".to_string(),
+            asked: "q".to_string(),
+            origin: Origin::Gate,
+        },
+        rustdl: Answer::Consistent,
+        hermit: Answer::Inconsistent,
+    });
+    let unknown = asked_with(Comparison::Indeterminate {
+        question: Provenance {
+            case_id: "c".to_string(),
+            check: "k".to_string(),
+            asked: "q".to_string(),
+            origin: Origin::Gate,
+        },
+        reason: "robot fell over".to_string(),
+    });
+
+    assert_eq!(differential_exit_code(std::slice::from_ref(&agree)), 0);
+    assert_eq!(differential_exit_code(std::slice::from_ref(&unknown)), 3);
+    assert_eq!(differential_exit_code(std::slice::from_ref(&diverge)), 5);
+    assert_eq!(
+        differential_exit_code(&[agree.clone(), unknown.clone()]),
+        3,
+        "one unanswered question is not everything agreed"
+    );
+    assert_eq!(
+        differential_exit_code(&[agree.clone(), unknown.clone(), diverge.clone()]),
+        5,
+        "a divergence is this job's headline result and must not be buried under a 3"
+    );
+    assert_eq!(
+        differential_exit_code(&[agree.clone(), agree]),
+        0,
+        "every question asked and every answer matched"
+    );
+}
+
+/// A configuration error is not a verdict about either reasoner: an
+/// unusable `--robot` is refused before any case is loaded, rather
+/// than becoming one ROBOT `Error` per question.
+#[test]
+fn an_unusable_robot_jar_is_a_configuration_error() {
+    let workdir = workdir("no-jar");
+    match run_differential(&DifferentialOptions {
+        suite: Path::new("suites/sulo"),
+        ontology: sulo(),
+        robot: Path::new("/nonexistent/robot.jar"),
+        filter: Some("taxonomy/deep-chain"),
+        workdir: &workdir,
+    }) {
+        DifferentialOutcome::Config(msg) => assert!(
+            msg.contains("--robot") && msg.contains("not a readable file"),
+            "{msg}"
+        ),
+        DifferentialOutcome::Ran(_) => {
+            panic!("a missing jar must be a configuration error, not a run")
+        }
+    }
+}
+
+/// A filter matching nothing is exit 2 here for the same reason it is
+/// on `run`: a differential over zero cases would report a green
+/// cross-check having asked nothing.
+#[test]
+fn a_filter_matching_nothing_is_a_configuration_error() {
+    let workdir = workdir("no-match");
+    match run_differential(&DifferentialOptions {
+        suite: Path::new("suites/sulo"),
+        ontology: sulo(),
+        robot: Path::new("tests/fixtures/clean.ttl"),
+        filter: Some("no-such-case-anywhere"),
+        workdir: &workdir,
+    }) {
+        DifferentialOutcome::Config(msg) => assert!(msg.contains("matched none of the"), "{msg}"),
+        DifferentialOutcome::Ran(_) => panic!("a filter matching nothing must be refused"),
     }
 }

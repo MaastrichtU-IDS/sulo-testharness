@@ -55,16 +55,43 @@
 //! is exit 3 and a line in the report naming the shape that needs
 //! support.
 //!
-//! # What this module does not do
+//! # Which checks become questions, and why the positives are here
 //!
-//! It builds and compares. It does not decide the run's exit code, and
-//! it does not check that a run asked any questions at all: a case
-//! with only POSITIVE assertions yields zero questions, since a
-//! positive `Pass` from a sound reasoner needs no oracle of record.
-//! Whoever drives a whole suite through here (the `differential`
-//! subcommand, phase 7 task 4) must refuse a run that produced no
-//! questions, for the same reason `suite::discover` refuses a suite
-//! with no cases: nothing asked is not everything agreed.
+//! Not every check needs an oracle of record. A positive assertion
+//! rustdl PASSED is proved, and asking HermiT to confirm a proof is
+//! not what a complete reasoner is for. Four kinds do need one, and
+//! all four rest on the same thing: an ABSENCE of proof.
+//!
+//! 1. The consistency gate, in both directions.
+//! 2. `not_entails` and `not_entails_manchester`, whose `UnrefutedPass`
+//!    is by construction "no proof was found".
+//! 3. `satisfiable_expr`, whose expected answer is also `UnrefutedPass`
+//!    (see `oracle::check_satisfiable_expr`: UNSAT is the provable
+//!    direction, so "satisfiable" is the untrusted one).
+//! 4. **Positive assertions rustdl FAILED**, ruling 7. `oracle`'s own
+//!    message for that Fail says "Incompleteness is a possible cause;
+//!    the CI differential settles it". That `Fail` rests on absence of
+//!    proof exactly as a negative `UnrefutedPass` does, and if the
+//!    differential never asked about it that sentence would ship as a
+//!    falsehood. Recognised by [`crate::oracle::NO_PROOF_MARKER`], the
+//!    same constant `suite::downgrade_for_loss` matches on and the
+//!    same constant the message is built from, so editing the wording
+//!    cannot silently switch this off.
+//!
+//! Case 4 is also the most valuable direction. If HermiT finds no
+//! proof either, the two reasoners AGREE and the `Fail` is a genuine
+//! SULO regression. If HermiT DOES find the proof, that is a
+//! `Divergence` meaning rustdl is incomplete on this query rather than
+//! that SULO regressed, which is precisely the signal spec 5.3 calls
+//! the most valuable either reasoner could produce. [`Origin`] carries
+//! which of the four a question came from, so a report can say which.
+//!
+//! # Nothing asked is not everything agreed
+//!
+//! [`run_differential`] refuses a run that produced no questions
+//! (exit 2), for the same reason `suite::discover` refuses a suite with
+//! no cases. See [`no_questions_refusal`] for why that guard cannot
+//! fire today and is kept anyway.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -122,6 +149,28 @@ pub enum Answer {
     /// A satisfiability question: the expression is empty in every
     /// model.
     Unsatisfiable,
+}
+
+impl Answer {
+    /// Does this answer rest on a proof the reasoner EXHIBITED, or on
+    /// the absence of one?
+    ///
+    /// The three "true" answers are each a clash the reasoner actually
+    /// found, which soundness vouches for and which incompleteness
+    /// cannot manufacture. The three "false" answers are each "I
+    /// looked and found nothing", which from a complete reasoner is a
+    /// proof of absence and from an incomplete one is not.
+    ///
+    /// That distinction is what lets a divergence be reported in the
+    /// right direction without the report having to know which
+    /// question shape it came from.
+    #[must_use]
+    pub fn rests_on_a_proof(self) -> bool {
+        match self {
+            Answer::Inconsistent | Answer::Entailed | Answer::Unsatisfiable => true,
+            Answer::Consistent | Answer::NotEntailed | Answer::Satisfiable => false,
+        }
+    }
 }
 
 impl fmt::Display for Answer {
@@ -184,6 +233,41 @@ pub enum Probe {
     Unencodable(String),
 }
 
+/// Which of the four absence-resting check kinds a question came from.
+///
+/// Carried because a `Divergence` means something DIFFERENT depending
+/// on it, and the reader cannot work out which from the two answers
+/// alone. On a failing positive assertion, a divergence means rustdl
+/// is incomplete and the `Fail` that `run` reported is NOT a SULO
+/// regression; an agreement means it is one. On the gate or a negative
+/// assertion there is no `Fail` in the `run` report to reinterpret.
+///
+/// See the module doc for the full list and why positives are in it at
+/// all (ruling 7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// The consistency gate, in either direction.
+    Gate,
+    /// A negative assertion (`not_entails`, `not_entails_manchester`)
+    /// or a `satisfiable_expr`. rustdl's expected answer here is an
+    /// `UnrefutedPass`, which is by construction "no proof was found".
+    Unrefuted,
+    /// A POSITIVE assertion rustdl reported as a `Fail` carrying
+    /// [`crate::oracle::NO_PROOF_MARKER`]. Ruling 7.
+    FailingPositive,
+}
+
+impl fmt::Display for Origin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Origin::Gate => "consistency gate",
+            Origin::Unrefuted => "negative assertion",
+            Origin::FailingPositive => "positive assertion rustdl could not prove",
+        };
+        f.write_str(s)
+    }
+}
+
 /// Where a question came from, in enough detail to name a
 /// disagreement without holding the whole `Case`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,6 +279,8 @@ pub struct Provenance {
     pub check: String,
     /// What was asked, in prose.
     pub asked: String,
+    /// Which check kind produced it. See [`Origin`].
+    pub origin: Origin,
 }
 
 impl fmt::Display for Provenance {
@@ -336,10 +422,13 @@ pub fn ask(robot: &Path, question: &Question, workdir: &Path) -> HermitAnswer {
 /// read out of `rustdl`, the checks `suite::run_case` recorded for the
 /// same case.
 ///
-/// The negative assertions and the consistency gate only, per spec
-/// 5.3: those are exactly the answers soundness cannot vouch for. A
-/// positive `entails:` that rustdl PASSED is proved, and asking HermiT
-/// to confirm a proof is not what the oracle of record is for.
+/// The four absence-resting check kinds, per the module doc: the
+/// consistency gate, the negative assertions, `satisfiable_expr`, and
+/// (ruling 7) every POSITIVE assertion whose rustdl verdict is a
+/// `Fail` carrying [`crate::oracle::NO_PROOF_MARKER`]. A positive
+/// assertion that PASSED is proved, and asking HermiT to confirm a
+/// proof is not what the oracle of record is for, so it yields no
+/// question.
 ///
 /// Answers are matched to checks BY NAME, using the same format
 /// strings `suite::run_case` builds its check names from
@@ -400,6 +489,7 @@ pub fn questions(case: &Case, default_ontology: &Path, rustdl: &[CheckOutcome]) 
                 case_id: case.id.clone(),
                 check: check.to_string(),
                 asked: "is the ontology, plus this case's data, consistent?".to_string(),
+                origin: Origin::Gate,
             },
             QuestionKind::Consistency,
             answer_of(rustdl, check, Some(pass), None, Some(fail)),
@@ -415,6 +505,7 @@ pub fn questions(case: &Case, default_ontology: &Path, rustdl: &[CheckOutcome]) 
                     case_id: case.id.clone(),
                     check: "empty fragment".to_string(),
                     asked: "not_entails".to_string(),
+                    origin: Origin::Unrefuted,
                 },
                 QuestionKind::Entailment,
                 None,
@@ -440,6 +531,7 @@ pub fn questions(case: &Case, default_ontology: &Path, rustdl: &[CheckOutcome]) 
                             case_id: case.id.clone(),
                             check,
                             asked: describe_claim(claim),
+                            origin: Origin::Unrefuted,
                         },
                         kind,
                         rustdl,
@@ -452,6 +544,7 @@ pub fn questions(case: &Case, default_ontology: &Path, rustdl: &[CheckOutcome]) 
                     case_id: case.id.clone(),
                     check: "fragment parse".to_string(),
                     asked: "not_entails".to_string(),
+                    origin: Origin::Unrefuted,
                 },
                 QuestionKind::Entailment,
                 None,
@@ -479,6 +572,7 @@ pub fn questions(case: &Case, default_ontology: &Path, rustdl: &[CheckOutcome]) 
                 case_id: case.id.clone(),
                 check: check.clone(),
                 asked: format!("does the ontology entail {check}?"),
+                origin: Origin::Unrefuted,
             },
             QuestionKind::Entailment,
             rustdl,
@@ -505,6 +599,7 @@ pub fn questions(case: &Case, default_ontology: &Path, rustdl: &[CheckOutcome]) 
                 case_id: case.id.clone(),
                 check: check.clone(),
                 asked: format!("does {expr} have a model?"),
+                origin: Origin::Unrefuted,
             },
             QuestionKind::Satisfiability,
             rustdl,
@@ -512,7 +607,153 @@ pub fn questions(case: &Case, default_ontology: &Path, rustdl: &[CheckOutcome]) 
         ));
     }
 
+    // Ruling 7: every POSITIVE assertion rustdl failed to prove.
+    //
+    // Only the failing ones. A positive `Pass` is a proof, and the
+    // oracle of record exists for the answers soundness cannot vouch
+    // for, not to double-check the ones it can. `unproven` is what
+    // decides membership, and it matches on the same constant
+    // `oracle` builds the message from.
+
+    // `entails:`, one question per claim in the fragment. The probe is
+    // the same one `not_entails` uses; only the expected reading of
+    // the answer differs, and that lives in the `run` report rather
+    // than here.
+    if let Some(fragment) = &case.entails
+        && let Ok(claims) = parse_fragment(fragment, &pm)
+    {
+        for claim in &claims {
+            let check = format!("{claim:?}");
+            if !unproven(rustdl, &check) {
+                continue;
+            }
+            let (kind, probe) = encode_claim(claim);
+            out.push(build(
+                Provenance {
+                    case_id: case.id.clone(),
+                    check,
+                    asked: describe_claim(claim),
+                    origin: Origin::FailingPositive,
+                },
+                kind,
+                Some(kind_negative(kind)),
+                probe,
+            ));
+        }
+        // A fragment that does not parse produced an `Indeterminate`
+        // in the `run` report, not a Fail, so there is no absence-
+        // resting Fail here for HermiT to settle. The `not_entails`
+        // arm above surfaces its own parse failure because THAT
+        // fragment's questions are the whole reason the case is in the
+        // differential at all.
+    }
+
+    // `entails_manchester:`.
+    for s in &case.entails_manchester {
+        let check = format!("{} subClassOf {}", s.sub_expr, s.sup_expr);
+        if !unproven(rustdl, &check) {
+            continue;
+        }
+        let probe = match (parse_ce(&s.sub_expr, &pm), parse_ce(&s.sup_expr, &pm)) {
+            (Ok(sub), Ok(sup)) => subsumption_probe(&sub, &sup),
+            (Err(e), _) | (_, Err(e)) => Probe::Unencodable(e.to_string()),
+        };
+        out.push(build(
+            Provenance {
+                case_id: case.id.clone(),
+                check: check.clone(),
+                asked: format!("does the ontology entail {check}?"),
+                origin: Origin::FailingPositive,
+            },
+            QuestionKind::Entailment,
+            Some(Answer::NotEntailed),
+            probe,
+        ));
+    }
+
+    // `instance_of_expr:`. The individual is expanded through the same
+    // prefix map `suite::run_case` expands it through, because that is
+    // the token the check name was built from AND the individual the
+    // probe has to be about. Using the raw CURIE would miss the check
+    // and ask HermiT about an IRI nobody meant.
+    for i in &case.instance_of_expr {
+        let Ok(individual) = crate::prefixes::expand(&pm, &i.individual) else {
+            // An unexpandable prefix was already an `Indeterminate` in
+            // the `run` report, not an absence-resting Fail.
+            continue;
+        };
+        let check = format!("{individual} instanceOf {}", i.expr);
+        if !unproven(rustdl, &check) {
+            continue;
+        }
+        let probe = match parse_ce(&i.expr, &pm) {
+            Ok(ce) => individual_complement_probe(&individual, &ce),
+            Err(e) => Probe::Unencodable(e.to_string()),
+        };
+        out.push(build(
+            Provenance {
+                case_id: case.id.clone(),
+                check: check.clone(),
+                asked: format!(
+                    "does the ontology entail that {individual} is a {}?",
+                    i.expr
+                ),
+                origin: Origin::FailingPositive,
+            },
+            QuestionKind::Entailment,
+            Some(Answer::NotEntailed),
+            probe,
+        ));
+    }
+
+    // `unsatisfiable:`. `run_case` turns each into a
+    // `Claim::Unsatisfiable` with a positive expectation, so a Fail
+    // here is "the reasoner could not prove this class empty".
+    for class in &case.unsatisfiable {
+        let Ok(iri) = crate::prefixes::expand(&pm, class) else {
+            continue;
+        };
+        let claim = Claim::Unsatisfiable { class: iri };
+        let check = format!("{claim:?}");
+        if !unproven(rustdl, &check) {
+            continue;
+        }
+        let (kind, probe) = encode_claim(&claim);
+        out.push(build(
+            Provenance {
+                case_id: case.id.clone(),
+                check,
+                asked: describe_claim(&claim),
+                origin: Origin::FailingPositive,
+            },
+            kind,
+            Some(kind_negative(kind)),
+            probe,
+        ));
+    }
+
     out
+}
+
+/// Did rustdl report the check named `name` as a `Fail` resting on an
+/// ABSENCE of proof?
+///
+/// Ruling 7's membership test. Matched against
+/// [`crate::oracle::NO_PROOF_MARKER`], the same constant `oracle`
+/// builds the message from and the same one
+/// `suite::downgrade_for_loss` matches on, so editing the wording can
+/// never silently empty the positive half of the question set.
+///
+/// A `Fail` WITHOUT the marker (a negative expectation that was
+/// refuted, an unsatisfiable `satisfiable_expr`) rests on a clash the
+/// reasoner exhibited, which soundness vouches for; it needs no oracle
+/// of record and is not included. Neither is a missing check, an
+/// `Indeterminate`, or a `Pass`.
+fn unproven(checks: &[CheckOutcome], name: &str) -> bool {
+    checks.iter().any(|c| {
+        c.name == name
+            && matches!(&c.verdict, Verdict::Fail(msg) if msg.contains(crate::oracle::NO_PROOF_MARKER))
+    })
 }
 
 /// The answer meaning "the reasoner found the proof it was probing
@@ -987,4 +1228,435 @@ fn shape_name(ce: &ClassExpression<RcStr>) -> &'static str {
         ClassExpression::DataMaxCardinality { .. } => "DataMaxCardinality",
         ClassExpression::DataExactCardinality { .. } => "DataExactCardinality",
     }
+}
+
+// -------------------------------------------------------------------
+// Driving a whole suite, and reporting what came back.
+// -------------------------------------------------------------------
+
+/// What one differential run was asked to do.
+pub struct DifferentialOptions<'a> {
+    /// Directory of case manifests, walked recursively.
+    pub suite: &'a Path,
+    /// The ontology under test. REQUIRED here, unlike `run`'s
+    /// optional `--ontology`: the differential's whole purpose is to
+    /// ask two reasoners about one ontology, and a suite where every
+    /// case names its own is not a shape this subcommand needs to
+    /// support.
+    pub ontology: &'a Path,
+    /// The ROBOT jar.
+    pub robot: &'a Path,
+    /// Substring matched against the manifest PATH, exactly as
+    /// `run --filter` is.
+    pub filter: Option<&'a str>,
+    /// Where probe ontologies, merged files and ROBOT's own stdout and
+    /// stderr are written, one directory per question. Kept rather
+    /// than deleted: a divergence is only actionable if the reader can
+    /// open the probe that produced it.
+    pub workdir: &'a Path,
+}
+
+/// One question, asked and compared.
+///
+/// [`Comparison::Agree`] deliberately carries no provenance (an
+/// agreement is about the answer, not about where it came from), so
+/// this pairs every comparison with the question that produced it and
+/// a report can name all three outcomes uniformly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Asked {
+    pub provenance: Provenance,
+    pub comparison: Comparison,
+}
+
+/// The result of one whole-suite differential run.
+pub enum DifferentialOutcome {
+    /// Every selected case was run through both reasoners. Guaranteed
+    /// non-empty: see [`no_questions_refusal`].
+    Ran(Vec<Asked>),
+    /// A configuration error: exit 2, and NOT a statement about either
+    /// reasoner. Carries the message to print.
+    Config(String),
+}
+
+/// Ruling 8's refusal message.
+///
+/// # This guard cannot fire today, and is kept anyway
+///
+/// Stated plainly rather than left for someone to discover: as
+/// [`questions`] is written, EVERY case yields at least its
+/// consistency-gate question, and [`crate::suite::select`] already
+/// refuses a selection with no cases. So there is no input to the
+/// `differential` subcommand that reaches this message.
+///
+/// The plan's ruling 8 motivates it with "a case carrying only
+/// positive assertions that all passed yields zero questions", which
+/// was true of an earlier draft of `questions` and is not true of this
+/// one. The guard is kept because the property it defends is real and
+/// cheap to lose: the day someone makes the gate question conditional
+/// (on a case having no other questions, say, or on the ontology being
+/// unchanged since the last run), a filtered run would silently
+/// produce zero questions and this function is what stands between
+/// that and a green cross-check that asked nothing.
+///
+/// `tests/differential.rs` pins BOTH halves: that the message is
+/// produced for an empty question list, and that no case in the real
+/// suite currently produces one.
+#[must_use]
+pub fn no_questions_refusal(suite: &Path, cases: usize, filter: Option<&str>) -> String {
+    let narrowed = match filter {
+        Some(f) => format!(" (narrowed by --filter {f:?})"),
+        None => String::new(),
+    };
+    format!(
+        "the differential asked NO questions at all over the {cases} selected case(s) \
+         under {}{narrowed}, so it would report a green cross-check having put nothing \
+         to either reasoner. Nothing asked is not everything agreed. A case yields \
+         questions from its consistency gate, from every negative assertion, and from \
+         every positive assertion rustdl could not prove; a selection producing none of \
+         those is a configuration error.",
+        suite.display()
+    )
+}
+
+/// Discover, run both reasoners, and compare, over a whole suite.
+///
+/// Deferred cases are INCLUDED, unconditionally and with no flag to
+/// turn that off. They are deferred in the `run` path precisely
+/// because this is their oracle of record (`suite::DEFERRED_TAG`), so
+/// a differential that skipped them would leave them checked by
+/// nothing, which is the state this subcommand exists to end.
+///
+/// rustdl is re-run here rather than its results being passed in: the
+/// comparison needs the per-check outcomes for the SAME ontology
+/// HermiT is about to be asked about, and taking them from a separate
+/// invocation would let the two halves drift apart silently.
+pub fn run_differential(opts: &DifferentialOptions) -> DifferentialOutcome {
+    // Checked before any case is loaded, so a bad `--robot` is one
+    // clear message rather than one ROBOT `Error` per question. An
+    // unrunnable jar would otherwise be `Indeterminate` everywhere,
+    // which is exit 3 and honest but much harder to read.
+    if !opts.robot.is_file() {
+        return DifferentialOutcome::Config(format!(
+            "--robot {} is not a readable file: pass the path to a ROBOT jar (1.9.7 is \
+             what the encodings in this module were measured against). The differential \
+             needs a JVM and that jar; neither is on this harness's default path.",
+            opts.robot.display()
+        ));
+    }
+
+    let selected = match crate::suite::select(opts.suite, Some(opts.ontology), opts.filter) {
+        Ok(s) => s,
+        Err(msg) => return DifferentialOutcome::Config(msg),
+    };
+
+    let mut asked = Vec::new();
+    for (case, _path) in &selected {
+        let result = crate::suite::run_case(case, opts.ontology);
+        for (i, question) in questions(case, opts.ontology, &result.checks)
+            .iter()
+            .enumerate()
+        {
+            let dir = opts.workdir.join(format!("{}-{i}", sanitise(&case.id)));
+            let hermit = ask(opts.robot, question, &dir);
+            asked.push(Asked {
+                provenance: question.provenance.clone(),
+                comparison: compare(question, &hermit),
+            });
+        }
+    }
+
+    if asked.is_empty() {
+        return DifferentialOutcome::Config(no_questions_refusal(
+            opts.suite,
+            selected.len(),
+            opts.filter,
+        ));
+    }
+
+    DifferentialOutcome::Ran(asked)
+}
+
+/// A case id, made safe to use as one path component.
+fn sanitise(id: &str) -> String {
+    id.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+/// The process exit code for a whole differential run.
+///
+/// Divergence outranks Indeterminate, per ruling 2: a run that found
+/// the two reasoners disagreeing has produced its headline result, and
+/// burying it under a 3 because some other question also went
+/// unanswered would hide the one thing this job exists to report.
+///
+/// `0` requires that EVERY question was asked and every answer
+/// matched. It is never reached over an empty list, because
+/// [`run_differential`] refuses one.
+#[must_use]
+pub fn differential_exit_code(asked: &[Asked]) -> i32 {
+    if asked
+        .iter()
+        .any(|a| matches!(a.comparison, Comparison::Divergence { .. }))
+    {
+        5
+    } else if asked
+        .iter()
+        .any(|a| matches!(a.comparison, Comparison::Indeterminate { .. }))
+    {
+        3
+    } else {
+        0
+    }
+}
+
+/// What a divergence MEANS, in the reader's terms, naming the outlier.
+///
+/// HermiT is sound and complete for OWL 2 DL and rustdl is sound but
+/// incomplete, so in either direction rustdl is the outlier. Which
+/// DEFECT it is differs, and so does what the divergence implies for
+/// the `run` report:
+///
+/// * rustdl found no proof and HermiT exhibited one: an
+///   INCOMPLETENESS. Harmless to soundness, and on a failing positive
+///   assertion it means the `Fail` the `run` subcommand reported is
+///   the incompleteness rather than a SULO regression. Spec 5.3 calls
+///   that the most valuable signal either reasoner could produce.
+/// * rustdl claims a proof HermiT refutes: an UNSOUNDNESS. HermiT's
+///   completeness makes its "no proof" a proof of absence, so this is
+///   the alarming direction and every verdict from the same code path
+///   is suspect.
+///
+/// The third possibility is named too, because omitting it would be
+/// the overstatement this project exists to avoid: the two reasoners
+/// may have been asked DIFFERENT questions, if a probe encoding is
+/// wrong. The probe is on disk, so the reader can check.
+#[must_use]
+pub fn explain_divergence(origin: Origin, rustdl: Answer, hermit: Answer) -> String {
+    let direction = if !rustdl.rests_on_a_proof() && hermit.rests_on_a_proof() {
+        format!(
+            "rustdl is the outlier: HermiT exhibited a proof ({hermit}) that rustdl did \
+             not find ({rustdl}). That is a rustdl INCOMPLETENESS on this query, not a \
+             finding about the ontology."
+        )
+    } else if rustdl.rests_on_a_proof() && !hermit.rests_on_a_proof() {
+        format!(
+            "rustdl is the outlier, in the alarming direction: it claims a proof \
+             ({rustdl}) that HermiT refutes ({hermit}). HermiT is complete for OWL 2 DL, \
+             so its \"no proof\" is a proof of absence, and this reads as a rustdl \
+             UNSOUNDNESS. Every verdict resting on the same code path is suspect."
+        )
+    } else {
+        // Two answers that are neither each other nor opposite sides
+        // of the proof/absence line means the two reasoners were asked
+        // questions in different answer spaces, which is a harness
+        // bug, not a reasoner one.
+        format!(
+            "rustdl said {rustdl} and HermiT said {hermit}, which are not two answers to \
+             one question. That is a defect in this harness's own question building, not \
+             in either reasoner."
+        )
+    };
+
+    let consequence = match origin {
+        Origin::FailingPositive => {
+            " The `run` subcommand reports this check as a Fail resting on absence of \
+             proof; this divergence settles that message, and it settles it AGAINST a \
+             SULO regression."
+        }
+        Origin::Gate => {
+            " This is the case's consistency gate, so every other check in \
+             the case was judged against a consistency verdict the two reasoners do not \
+             share."
+        }
+        Origin::Unrefuted => {
+            " The `run` subcommand reports this check as an \
+             UnrefutedPass, a verdict that rests on exactly the absence of proof this \
+             divergence contradicts."
+        }
+    };
+
+    format!(
+        "{direction}{consequence} If neither reading fits, check the probe ontology this \
+         question was built from: a probe that asks a different question than rustdl was \
+         asked would show up here too."
+    )
+}
+
+/// What an AGREEMENT means, where it means more than "both said the
+/// same thing".
+///
+/// Only ruling 7's positives get a note. Two reasoners agreeing that a
+/// positive assertion has no proof, one of them complete, is a proof
+/// of absence: the `Fail` the `run` subcommand reported is real. That
+/// is worth saying, because `oracle`'s own message for that Fail
+/// explicitly defers the question to this job.
+#[must_use]
+pub fn explain_agreement(origin: Origin, answer: Answer) -> Option<String> {
+    match origin {
+        Origin::FailingPositive if !answer.rests_on_a_proof() => Some(
+            "both reasoners found no proof, and HermiT is complete for OWL 2 DL, so this \
+             is a proof of absence: the Fail the `run` subcommand reports for this check \
+             is a genuine regression in the ontology, not rustdl incompleteness."
+                .to_string(),
+        ),
+        // A failing positive on which HermiT ALSO found the proof
+        // would not be an agreement (rustdl's answer here is always
+        // the absence one), so this arm is unreachable and says
+        // nothing rather than guessing.
+        _ => None,
+    }
+}
+
+/// Counts, for the summary line and the JSON payload.
+#[must_use]
+fn tally(asked: &[Asked]) -> (usize, usize, usize) {
+    let mut agreed = 0;
+    let mut diverged = 0;
+    let mut indeterminate = 0;
+    for a in asked {
+        match a.comparison {
+            Comparison::Agree { .. } => agreed += 1,
+            Comparison::Divergence { .. } => diverged += 1,
+            Comparison::Indeterminate { .. } => indeterminate += 1,
+        }
+    }
+    (agreed, diverged, indeterminate)
+}
+
+/// The human-readable differential report.
+///
+/// Divergences first and in full, because they are the only reason
+/// this job exists. Indeterminates next, because a question that was
+/// never answered is not a question that agreed. Agreements last and
+/// one line each: they are the bulk of the output and the least
+/// informative part of it, but they are printed rather than counted so
+/// that a reader can see WHICH questions were asked, and notice one
+/// they expected and cannot find.
+#[must_use]
+pub fn render(asked: &[Asked], opts: &DifferentialOptions) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "differential: rustdl vs HermiT\n  suite:    {}\n  ontology: {}\n  robot:    {}\n  probes:   {}\n\n",
+        opts.suite.display(),
+        opts.ontology.display(),
+        opts.robot.display(),
+        opts.workdir.display()
+    ));
+
+    for a in asked {
+        if let Comparison::Divergence {
+            question,
+            rustdl,
+            hermit,
+        } = &a.comparison
+        {
+            out.push_str(&format!(
+                "DIVERGENCE  {} / {}\n    from:   {}\n    asked:  {}\n    rustdl: {}\n    HermiT: {}\n    {}\n\n",
+                question.case_id,
+                question.check,
+                question.origin,
+                question.asked,
+                rustdl,
+                hermit,
+                explain_divergence(question.origin, *rustdl, *hermit)
+            ));
+        }
+    }
+
+    for a in asked {
+        if let Comparison::Indeterminate { question, reason } = &a.comparison {
+            out.push_str(&format!(
+                "INDETERMINATE  {} / {}\n    asked:  {}\n    {}\n\n",
+                question.case_id, question.check, question.asked, reason
+            ));
+        }
+    }
+
+    for a in asked {
+        if let Comparison::Agree { answer } = &a.comparison {
+            out.push_str(&format!(
+                "agree  {} / {}: both answered {}\n",
+                a.provenance.case_id, a.provenance.check, answer
+            ));
+            if let Some(note) = explain_agreement(a.provenance.origin, *answer) {
+                out.push_str(&format!("    {note}\n"));
+            }
+        }
+    }
+
+    let (agreed, diverged, indeterminate) = tally(asked);
+    out.push_str(&format!(
+        "\n{} question(s): {agreed} agreed, {diverged} diverged, {indeterminate} \
+         indeterminate\n",
+        asked.len()
+    ));
+    out
+}
+
+/// The same report as JSON.
+#[must_use]
+pub fn render_json(asked: &[Asked], opts: &DifferentialOptions) -> String {
+    let questions: Vec<serde_json::Value> = asked
+        .iter()
+        .map(|a| {
+            let origin = match a.provenance.origin {
+                Origin::Gate => "gate",
+                Origin::Unrefuted => "unrefuted",
+                Origin::FailingPositive => "failing_positive",
+            };
+            let mut row = serde_json::json!({
+                "case": a.provenance.case_id,
+                "check": a.provenance.check,
+                "asked": a.provenance.asked,
+                "origin": origin,
+            });
+            let map = row.as_object_mut().expect("json! built an object");
+            match &a.comparison {
+                Comparison::Agree { answer } => {
+                    map.insert("outcome".into(), "agree".into());
+                    map.insert("rustdl".into(), answer.to_string().into());
+                    map.insert("hermit".into(), answer.to_string().into());
+                    if let Some(note) = explain_agreement(a.provenance.origin, *answer) {
+                        map.insert("note".into(), note.into());
+                    }
+                }
+                Comparison::Divergence {
+                    question,
+                    rustdl,
+                    hermit,
+                } => {
+                    map.insert("outcome".into(), "divergence".into());
+                    map.insert("rustdl".into(), rustdl.to_string().into());
+                    map.insert("hermit".into(), hermit.to_string().into());
+                    map.insert(
+                        "note".into(),
+                        explain_divergence(question.origin, *rustdl, *hermit).into(),
+                    );
+                }
+                Comparison::Indeterminate { reason, .. } => {
+                    map.insert("outcome".into(), "indeterminate".into());
+                    map.insert("reason".into(), reason.clone().into());
+                }
+            }
+            row
+        })
+        .collect();
+
+    let (agreed, diverged, indeterminate) = tally(asked);
+    let payload = serde_json::json!({
+        "suite": opts.suite.display().to_string(),
+        "ontology": opts.ontology.display().to_string(),
+        "robot": opts.robot.display().to_string(),
+        "probes": opts.workdir.display().to_string(),
+        "summary": {
+            "questions": asked.len(),
+            "agreed": agreed,
+            "diverged": diverged,
+            "indeterminate": indeterminate,
+            "exit_code": differential_exit_code(asked),
+        },
+        "questions": questions,
+    });
+    serde_json::to_string_pretty(&payload).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"))
 }

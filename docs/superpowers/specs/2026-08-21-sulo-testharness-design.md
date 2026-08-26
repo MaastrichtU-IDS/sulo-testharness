@@ -283,6 +283,18 @@ assertion and every consistency verdict against HermiT via the existing ROBOT
 setup. This also covers the two gaps rustdl provably cannot see today: the
 data-range `allValuesFrom` (section 9).
 
+**And every positive assertion rustdl reported as a `Fail` because it found no
+proof.** Scoping the differential to negatives and the gate was the original
+plan and was too narrow: `oracle::verdict_for` tells the user, on exactly those
+Fails, "Incompleteness is a possible cause; the CI differential settles it".
+That `Fail` rests on absence of proof precisely as a negative `UnrefutedPass`
+does, so leaving it out would have shipped that sentence as a falsehood. It is
+also the most valuable direction. A positive `Fail` HermiT cannot prove either
+is a real SULO regression, and the two reasoners agreeing on it (one of them
+complete) is a proof of absence; a positive `Fail` HermiT CAN prove is a rustdl
+incompleteness rather than an ontology regression, and the report says so and
+names rustdl as the outlier.
+
 Disagreement between the two reasoners is its own verdict, **Divergence**, and it
 is always loud. It does not mean SULO regressed; it means one of the two
 reasoners is wrong, which is the most valuable signal either could produce.
@@ -897,21 +909,32 @@ invisible to review and obvious to a mutant.
 
 ## 10.2 The CLI surface
 
-Two subcommands. The exit codes of 5.4 that the binary can produce today, `0`
-through `4`, are each observed by `tests/cli.rs` by launching it; a unit test
-over `verdict::exit_code` cannot catch a `main` that forgets to propagate, or
-that aggregates the wrong set, or that prints a report and returns success
-anyway. Exit `5` awaits the 5.3 differential, and `tests/cli.rs` asserts its
-ABSENCE rather than its production, in a form written to break when phase 7
-lands.
+Three subcommands. Every one of 5.4's exit codes, `0` through `5`, is observed
+by `tests/cli.rs` by launching the binary; a unit test over `verdict::exit_code`
+cannot catch a `main` that forgets to propagate, or that aggregates the wrong
+set, or that prints a report and returns success anyway. Exit `5` is observed on
+`restrictions/timeinstant-datarange`, where the two reasoners genuinely disagree,
+and exit `0` is observed on a case where they agree: one direction alone would
+not be evidence.
 
 ```
 sulo-testharness run --suite <dir> [--ontology <ttl>] [--filter <substr>]
                      [--format text|json|junit]
                      [--deferred skip|include|only] [--allow-indeterminate]
 
+sulo-testharness differential --suite <dir> --ontology <ttl> --robot <jar>
+                              [--filter <substr>] [--format text|json]
+                              [--workdir <dir>]
+
 sulo-testharness golden --ontology <ttl> --golden <file> [--accept-golden]
 ```
+
+`differential` is its own subcommand rather than a flag on `run` because it
+needs a JVM and a ROBOT jar, and neither may leak into the default or local
+path. It refuses a run that asked NO questions for the same reason `run` refuses
+a suite with no cases: nothing asked is not everything agreed. That guard cannot
+fire against the suite as it stands, because every case yields at least its
+consistency-gate question, and it is kept and tested anyway.
 
 Three ways a run could check nothing and still report a pass are refused as
 configuration errors (exit 2), not tolerated: a suite root holding no cases, a
@@ -924,7 +947,10 @@ is the CI differential rather than the pinned reasoner (5.3, and the note at
 the end of section 9). The default, `skip`, names and counts them but does not
 run them, and they are a distinct type from a case result so that reaching the
 exit-code aggregation is structurally impossible rather than filtered against.
-`only` runs exactly them, and is the seam the phase 7 differential drives.
+`only` runs exactly them under the pinned reasoner. The `differential`
+subcommand does NOT use that seam: it includes every case unconditionally,
+because a differential that skipped the cases it is the oracle of record for
+would leave them checked by nothing.
 
 ## 11. CI integration
 
@@ -1083,6 +1109,8 @@ Six phases, each independently verifiable.
 6. The SULO suite content, now roughly 70 cases across taxonomy, properties,
    restrictions, domain and range, and the two patterns.
 7. HermiT differential job (5.3), covering negative assertions, consistency
-   verdicts, and the `oracle: hermit` cases.
+   verdicts, the positive assertions rustdl could not prove, and the
+   `oracle: hermit` cases. Done: `src/hermit.rs`, `src/differential.rs`, the
+   `differential` subcommand, and `.github/workflows/differential.yml`.
 8. Release binaries, `action.yml`, and the consumer workflow pull request to
    `AIDAVA-DEV/sulo`.

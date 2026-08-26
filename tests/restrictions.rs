@@ -200,9 +200,18 @@ fn duration_nonnegative_asserts_only_inconsistency() {
 /// the pinned reasoner cannot enforce (see this file's module doc and
 /// `suites/sulo/restrictions/README.md`). This test documents the
 /// current, known-wrong `Fail` rather than silently ignoring the
-/// case: if this ever starts passing (a reasoner upgrade, or the
-/// HermiT differential landing), THIS assertion breaks first, which
-/// is the signal to move the case into `EXPECTED` above.
+/// case: if this ever starts passing (a reasoner upgrade), THIS
+/// assertion breaks first, which is the signal to move the case into
+/// `EXPECTED` above.
+///
+/// Note that the HermiT differential landing did NOT change this, and
+/// should not have: the differential decides the case (HermiT answers
+/// INCONSISTENT, rustdl answers CONSISTENT, and the disagreement is a
+/// Divergence and exit 5), but `run_case` still runs under the PINNED
+/// reasoner, which still cannot see the axiom. The two events are
+/// separate, and conflating them would move a case into an enforced
+/// table on the strength of a verdict from a reasoner that is not the
+/// one this test runs.
 #[test]
 fn timeinstant_datarange_is_tagged_and_currently_unenforced() {
     let path = Path::new(DIR).join(format!("{EXCLUDED}.yaml"));

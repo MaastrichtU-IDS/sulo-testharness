@@ -2,6 +2,13 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
+// The whole module, not its `render`/`render_json`, which collide by
+// name with `report`'s. Qualified at the two call sites instead, so a
+// reader sees which report is being built.
+use sulo_testharness::differential;
+use sulo_testharness::differential::{
+    DifferentialOptions, DifferentialOutcome, differential_exit_code, run_differential,
+};
 use sulo_testharness::golden::{GoldenOutcome, check_golden};
 use sulo_testharness::load::load_file;
 use sulo_testharness::report::{render, render_json, render_junit};
@@ -34,6 +41,21 @@ enum Format {
     Junit,
 }
 
+/// Output formats for the `differential` subcommand.
+///
+/// No JUnit here, deliberately. A differential run makes one claim
+/// ("the two reasoners agree"), which is not a set of test cases, and
+/// rendering it as one would invite a consumer to read a Divergence as
+/// an ordinary test failure. It is neither: it is a statement about a
+/// REASONER, not about SULO.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum DiffFormat {
+    /// Human-readable report, the default.
+    Text,
+    /// JSON, one object per question.
+    Json,
+}
+
 /// What to do with cases whose oracle of record is not this reasoner.
 ///
 /// ONE flag with three values for the same reason `--format` is one
@@ -46,7 +68,8 @@ enum Deferred {
     Skip,
     /// Run them alongside everything else.
     Include,
-    /// Run only them. The seam the phase 7 HermiT differential uses.
+    /// Run only them, under the pinned reasoner. Not what the
+    /// `differential` subcommand uses; that one includes every case.
     Only,
 }
 
@@ -90,6 +113,37 @@ enum Command {
         /// Indeterminates stay in the report either way.
         #[arg(long)]
         allow_indeterminate: bool,
+    },
+    /// Cross-check every absence-resting answer against HermiT.
+    ///
+    /// Needs a JVM and a ROBOT jar, which is why it is its own
+    /// subcommand rather than a flag on `run`: neither may leak into
+    /// the default or local path (spec 5.3).
+    Differential {
+        /// Directory of case manifests, walked recursively.
+        #[arg(long)]
+        suite: PathBuf,
+        /// The ontology both reasoners are asked about. Required, not
+        /// optional as it is on `run`.
+        #[arg(long)]
+        ontology: PathBuf,
+        /// Path to a ROBOT jar (measured against 1.9.7).
+        #[arg(long)]
+        robot: PathBuf,
+        /// Run only cases whose manifest path contains this
+        /// substring. Matching nothing is exit 2, never a green run.
+        #[arg(long)]
+        filter: Option<String>,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = DiffFormat::Text)]
+        format: DiffFormat,
+        /// Where probe ontologies and ROBOT's own output are kept, one
+        /// directory per question. Defaults to a directory under the
+        /// system temp directory. A divergence is only actionable if
+        /// the reader can open the probe that produced it, so these
+        /// are never deleted.
+        #[arg(long)]
+        workdir: Option<PathBuf>,
     },
     /// Compare the inferred closure against a golden file.
     Golden {
@@ -153,6 +207,49 @@ fn main() -> ExitCode {
             // was asked about cannot set an exit code.
             let verdict = aggregate_cases(&results);
             ExitCode::from(u8::try_from(run_exit_code(&verdict, allow_indeterminate)).unwrap_or(2))
+        }
+        Command::Differential {
+            suite,
+            ontology,
+            robot,
+            filter,
+            format,
+            workdir,
+        } => {
+            let workdir = workdir.unwrap_or_else(|| {
+                std::env::temp_dir().join(format!(
+                    "sulo-testharness-differential-{}",
+                    std::process::id()
+                ))
+            });
+            let opts = DifferentialOptions {
+                suite: &suite,
+                ontology: &ontology,
+                robot: &robot,
+                filter: filter.as_deref(),
+                workdir: &workdir,
+            };
+
+            let asked = match run_differential(&opts) {
+                DifferentialOutcome::Ran(a) => a,
+                // Exit 2: a harness or configuration error, which is
+                // NOT a statement about either reasoner. Same route,
+                // and the same stderr, as `run`'s.
+                DifferentialOutcome::Config(msg) => {
+                    eprintln!("error: {msg}");
+                    return ExitCode::from(2);
+                }
+            };
+
+            match format {
+                DiffFormat::Text => print!("{}", differential::render(&asked, &opts)),
+                DiffFormat::Json => println!("{}", differential::render_json(&asked, &opts)),
+            }
+
+            // 5 on any divergence, 3 on any question that could not be
+            // answered, 0 only when every question was asked AND every
+            // answer matched.
+            ExitCode::from(u8::try_from(differential_exit_code(&asked)).unwrap_or(2))
         }
         Command::Golden {
             ontology,

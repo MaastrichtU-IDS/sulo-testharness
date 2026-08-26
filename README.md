@@ -50,13 +50,28 @@ every run and compared byte for byte, so a SULO bump that the mutants do not
 reflect is a build failure rather than a suite quietly testing a frozen
 ontology.
 
+### HermiT differential
+
+rustdl is sound but incomplete, so it cannot certify a non-entailment. HermiT is
+complete for OWL 2 DL, so the `differential` subcommand puts every
+absence-resting answer the harness produces back to HermiT through ROBOT: every
+consistency verdict, every negative assertion, and every positive assertion
+rustdl reported as a Fail because it could not find a proof. A disagreement is
+`Divergence` and exit 5, and it is reported with BOTH answers, because the point
+is that one of the two reasoners is wrong and the reader has to be able to tell
+which.
+
+It needs a JVM and a ROBOT jar, so it is a CI-only job
+(`.github/workflows/differential.yml`) and never runs on the default path. On
+SULO today it asks 92 questions and finds one real divergence, on
+`timeinstant-datarange`: rustdl cannot represent the data-range `allValuesFrom`
+at all, so it reports the offending data consistent while HermiT finds the
+clash.
+
 ### Not yet done
 
-The HermiT differential (spec 5.3), which is why exit code `5` (oracle
-divergence) is documented but not yet reachable from the binary, and why the
-one case asserting a data range the pinned reasoner cannot enforce is deferred
-rather than run. Also outstanding: three of the five golden-closure components,
-which need a probe ABox since `sulo.ttl` declares no individuals.
+Three of the five golden-closure components, which need a probe ABox since
+`sulo.ttl` declares no individuals.
 
 ## Design
 
@@ -103,13 +118,31 @@ deferred, and two cases sharing an `id`.
 `--deferred include|only` governs the cases tagged `oracle-hermit`, whose
 oracle of record is the HermiT differential rather than the pinned reasoner.
 By default they are named and counted but not run, and cannot set the exit
-code; `only` runs exactly them.
+code; `only` runs exactly them under the pinned reasoner anyway. The
+`differential` subcommand ignores the tag entirely and includes every case,
+because a differential that skipped the cases it is the oracle for would leave
+them checked by nothing.
 
 `--allow-indeterminate` exits 0 rather than 3 when the run holds an
 Indeterminate and no Fail (spec 5.4). It can never suppress a Fail, and the
 Indeterminates stay in the report either way. An Indeterminate caused by axiom
 loss means the reasoner saw a weaker ontology than the one that ships, so reach
 for this only when a genuine timeout is blocking you.
+
+Cross-check against HermiT. Needs a JVM and a ROBOT 1.9.7 jar, which is why it
+is its own subcommand rather than a flag on `run`:
+
+```sh
+cargo run -- differential --suite suites/sulo --ontology ../sulo/sulo.ttl \
+                          --robot robot.jar
+```
+
+Exit 5 on any divergence, 3 on any question neither reasoner could be asked, 2
+on a configuration error, and 0 only when every question was put to both
+reasoners and every answer matched. `--filter` narrows it the same way `run`'s
+does, `--format json` is for a machine consumer, and `--workdir` says where the
+probe ontologies are kept: a divergence is only actionable if the reader can
+open the probe that produced it.
 
 Compare the inferred closure against the committed golden file, and re-baseline
 it deliberately after a legitimate change:

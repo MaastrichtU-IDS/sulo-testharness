@@ -9,8 +9,8 @@
 //!
 //! A skip-when-unset gate is one wrong line away from being a suite
 //! that can never fail, so the gate is a pure function
-//! (`resolve_jar`) with its own tests, and it distinguishes three
-//! states rather than two:
+//! (`hermit::resolve_jar`) with its own tests, and it distinguishes
+//! three states rather than two:
 //!
 //! * unset: skip, with a message naming the variable.
 //! * set to something unusable (empty, or not a readable file): PANIC.
@@ -19,6 +19,17 @@
 //!   outcome this repository keeps finding, so a misconfigured
 //!   variable is louder than an unset one, not quieter.
 //! * set to a readable file: run.
+//!
+//! And a fourth state on top of those three, ruling 9: with
+//! `SULO_ROBOT_JAR_REQUIRED` set, an unset `SULO_ROBOT_JAR` stops
+//! being a skip and becomes a failure. The differential CI job sets
+//! it, because there a typo in the step that exports the jar path
+//! would otherwise leave every test below skipping and the job green.
+//!
+//! The gate lives in `src/hermit.rs` rather than here because three
+//! test binaries share it (`tests/hermit.rs`, `tests/differential.rs`,
+//! `tests/cli.rs`), and three copies of a skip rule is three chances
+//! for one of them to skip when it should fail.
 //!
 //! The classification arms (which message means what) are unit-tested
 //! without a JVM in `src/hermit.rs`. What can only be tested here is
@@ -29,62 +40,19 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use sulo_testharness::hermit::{HermitAnswer, consistency, consistency_with_deadline};
-
-/// The environment variable naming the ROBOT jar.
-const JAR_VAR: &str = "SULO_ROBOT_JAR";
+use sulo_testharness::hermit::{
+    HermitAnswer, JAR_REQUIRED_VAR, JAR_VAR, Jar, consistency, consistency_with_deadline,
+    jar_from_env, resolve_jar,
+};
 
 /// Real SULO, the ontology every differential question is really
 /// about.
 const SULO: &str = "../sulo/sulo.ttl";
 
-/// What the gate decided about `SULO_ROBOT_JAR`.
-#[derive(Debug, PartialEq, Eq)]
-enum Jar {
-    Use(PathBuf),
-    Skip,
-    Misconfigured(String),
-}
-
-/// Decide from the variable's value alone, so the decision can be
-/// tested without mutating the process environment (which is `unsafe`
-/// in edition 2024 and racy under a parallel test binary anyway).
-fn resolve_jar(value: Option<OsString>) -> Jar {
-    match value {
-        None => Jar::Skip,
-        Some(v) if v.is_empty() => Jar::Misconfigured(format!(
-            "{JAR_VAR} is set but empty. That is a broken configuration, not a request \
-             to skip: unset it to skip these tests."
-        )),
-        Some(v) => {
-            let path = PathBuf::from(v);
-            if path.is_file() {
-                Jar::Use(path)
-            } else {
-                Jar::Misconfigured(format!(
-                    "{JAR_VAR} is set to {}, which is not a readable file. Refusing to \
-                     skip: a differential that silently ran nothing would report a \
-                     confident green.",
-                    path.display()
-                ))
-            }
-        }
-    }
-}
-
-/// The jar, or `None` after printing why the caller should stop.
+/// The jar, or `None` after saying why. Thin wrapper so a reader of a
+/// test below sees the gate by name.
 fn jar() -> Option<PathBuf> {
-    match resolve_jar(std::env::var_os(JAR_VAR)) {
-        Jar::Use(p) => Some(p),
-        Jar::Skip => {
-            eprintln!(
-                "SKIPPED: {JAR_VAR} is not set, so the HermiT differential driver was \
-                 not exercised. Set it to a ROBOT 1.9.7 jar to run these tests."
-            );
-            None
-        }
-        Jar::Misconfigured(msg) => panic!("{msg}"),
-    }
+    jar_from_env()
 }
 
 /// A per-test scratch directory, removed first so a previous run's
@@ -114,12 +82,12 @@ fn sulo() -> &'static Path {
 
 #[test]
 fn an_unset_variable_skips() {
-    assert_eq!(resolve_jar(None), Jar::Skip);
+    assert_eq!(resolve_jar(None, None), Jar::Skip);
 }
 
 #[test]
 fn an_empty_variable_is_a_misconfiguration_not_a_skip() {
-    match resolve_jar(Some(OsString::from(""))) {
+    match resolve_jar(Some(OsString::from("")), None) {
         Jar::Misconfigured(msg) => assert!(msg.contains("set but empty"), "{msg}"),
         other => panic!("an empty {JAR_VAR} must be refused, got {other:?}"),
     }
@@ -127,7 +95,7 @@ fn an_empty_variable_is_a_misconfiguration_not_a_skip() {
 
 #[test]
 fn a_variable_pointing_at_nothing_is_a_misconfiguration_not_a_skip() {
-    match resolve_jar(Some(OsString::from("/nonexistent/robot.jar"))) {
+    match resolve_jar(Some(OsString::from("/nonexistent/robot.jar")), None) {
         Jar::Misconfigured(msg) => assert!(msg.contains("not a readable file"), "{msg}"),
         other => panic!("an unusable {JAR_VAR} must be refused, got {other:?}"),
     }
@@ -137,7 +105,70 @@ fn a_variable_pointing_at_nothing_is_a_misconfiguration_not_a_skip() {
 fn a_variable_pointing_at_a_file_is_used() {
     let existing = OsString::from("tests/fixtures/clean.ttl");
     assert_eq!(
-        resolve_jar(Some(existing)),
+        resolve_jar(Some(existing), None),
+        Jar::Use(PathBuf::from("tests/fixtures/clean.ttl"))
+    );
+}
+
+// ---------------------------------------------------------------
+// Ruling 9: strict mode, where a skip is a failure.
+// ---------------------------------------------------------------
+
+/// The row the differential CI job depends on. Without it, a typo in
+/// the workflow step that exports the jar path leaves every jar-gated
+/// test in this repository skipping, and the job reports a confident
+/// green having asserted nothing about either reasoner.
+#[test]
+fn strict_mode_turns_a_missing_jar_into_a_failure_not_a_skip() {
+    match resolve_jar(None, Some(OsString::from("1"))) {
+        Jar::Misconfigured(msg) => {
+            assert!(
+                msg.contains(JAR_REQUIRED_VAR) && msg.contains("a skip is a failure"),
+                "the refusal must name the variable that caused it: {msg}"
+            );
+        }
+        other => panic!(
+            "with {JAR_REQUIRED_VAR} set, an unset {JAR_VAR} must be refused, got \
+             {other:?}. A skip here is a green CI job that asserted nothing"
+        ),
+    }
+}
+
+/// `"0"` and `"false"` turn strict mode ON, like every other non-empty
+/// value. Pinned because it looks wrong at a glance and is deliberate:
+/// guessing that `"0"` means "not strict" makes a workflow typo
+/// silently green, while guessing the other way can only ever produce
+/// a loud failure a human then looks at.
+#[test]
+fn any_non_empty_value_turns_strict_mode_on() {
+    for value in ["0", "false", "no", "1"] {
+        assert!(
+            matches!(
+                resolve_jar(None, Some(OsString::from(value))),
+                Jar::Misconfigured(_)
+            ),
+            "{JAR_REQUIRED_VAR}={value:?} must be strict"
+        );
+    }
+}
+
+/// An EMPTY `SULO_ROBOT_JAR_REQUIRED` is not strict, so a workflow
+/// that writes `${{ env.MAYBE }}` into it and gets an empty string
+/// still skips rather than failing for a reason nobody asked for.
+#[test]
+fn an_empty_required_variable_is_not_strict() {
+    assert_eq!(resolve_jar(None, Some(OsString::from(""))), Jar::Skip);
+}
+
+/// Strict mode does not invent a jar: a jar that IS set and IS usable
+/// is still used, and strictness changes nothing about it.
+#[test]
+fn strict_mode_still_uses_a_usable_jar() {
+    assert_eq!(
+        resolve_jar(
+            Some(OsString::from("tests/fixtures/clean.ttl")),
+            Some(OsString::from("1"))
+        ),
         Jar::Use(PathBuf::from("tests/fixtures/clean.ttl"))
     );
 }

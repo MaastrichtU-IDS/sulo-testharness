@@ -9,8 +9,12 @@ description: >-
   is currently reported consistent, not inconsistent. Written and
   tagged oracle-hermit anyway, deliberately: it documents the true
   expectation and is excluded from tests/restrictions.rs's EXPECTED
-  table so it does not fail CI on a known reasoner gap. It activates
-  once a HermiT differential lands (see suites/sulo/restrictions/README.md).
+  table so it does not fail CI on a known reasoner gap. The HermiT
+  differential now decides it: HermiT answers INCONSISTENT, rustdl
+  answers CONSISTENT, and the disagreement is reported as a Divergence
+  (exit 5). It moves into the enforced table only when the PINNED
+  reasoner can enforce the axiom, which has not happened
+  (see suites/sulo/restrictions/README.md).
 data: data/timeinstant-datarange.ttl
 prefixes:
   ex: http://example.org/

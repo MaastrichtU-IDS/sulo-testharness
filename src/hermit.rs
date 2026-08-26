@@ -381,6 +381,115 @@ fn trimmed(output: &str) -> String {
     }
 }
 
+// -------------------------------------------------------------------
+// The jar gate, shared by every test binary that needs a real ROBOT.
+// -------------------------------------------------------------------
+
+/// The environment variable naming the ROBOT jar.
+pub const JAR_VAR: &str = "SULO_ROBOT_JAR";
+
+/// The environment variable that turns a SKIP into a FAILURE.
+///
+/// Ruling 9 of the differential plan. The gate below skips cleanly
+/// when [`JAR_VAR`] is unset, which is right on a laptop with no JVM
+/// and wrong in the differential CI job: a typo in the workflow step
+/// that sets [`JAR_VAR`] would leave every jar-gated test skipping,
+/// the job would go green, and it would have asserted nothing. That is
+/// this project's recurring defect shape arriving through a workflow
+/// file instead of through a bad assertion.
+///
+/// So the job sets this variable too, and then an unset [`JAR_VAR`] is
+/// a misconfiguration rather than a skip.
+///
+/// ANY non-empty value turns strict mode on, including `"0"` and
+/// `"false"`. Deliberately: the two ways of guessing wrong are not
+/// symmetric. Reading `"0"` as "not strict" would let a workflow
+/// typo produce a permanently green job that asserted nothing, while
+/// reading it as "strict" can only ever produce a loud failure that a
+/// human then looks at.
+pub const JAR_REQUIRED_VAR: &str = "SULO_ROBOT_JAR_REQUIRED";
+
+/// What the gate decided about [`JAR_VAR`].
+///
+/// Three states, not two. "Set to something unusable" must not
+/// collapse into "unset": a CI job that thought it had configured the
+/// jar and quietly ran zero assertions is precisely the "green while
+/// testing nothing" outcome this repository keeps finding, so a
+/// misconfigured variable is LOUDER than an unset one, not quieter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Jar {
+    /// Use this jar.
+    Use(PathBuf),
+    /// Skip, and say so by name.
+    Skip,
+    /// Refuse. Carries the message to panic with.
+    Misconfigured(String),
+}
+
+/// Decide from the two variables' values alone.
+///
+/// A pure function over the values rather than a reader of the process
+/// environment, because mutating the environment is `unsafe` in
+/// edition 2024 and racy under a parallel test binary anyway. This
+/// lives in `src/` rather than in one test file because three test
+/// binaries (`tests/hermit.rs`, `tests/differential.rs`,
+/// `tests/cli.rs`) all gate on it, and three copies of a skip rule is
+/// three chances for one of them to skip when it should fail.
+#[must_use]
+pub fn resolve_jar(value: Option<OsString>, required: Option<OsString>) -> Jar {
+    let strict = required.is_some_and(|v| !v.is_empty());
+    match value {
+        None if strict => Jar::Misconfigured(format!(
+            "{JAR_REQUIRED_VAR} is set, so a skip is a failure, but {JAR_VAR} is not \
+             set. Refusing to skip: this run was configured to exercise a real ROBOT \
+             and would otherwise report a confident green having asserted nothing."
+        )),
+        None => Jar::Skip,
+        Some(v) if v.is_empty() => Jar::Misconfigured(format!(
+            "{JAR_VAR} is set but empty. That is a broken configuration, not a request \
+             to skip: unset it to skip these tests."
+        )),
+        Some(v) => {
+            let path = PathBuf::from(v);
+            if path.is_file() {
+                Jar::Use(path)
+            } else {
+                Jar::Misconfigured(format!(
+                    "{JAR_VAR} is set to {}, which is not a readable file. Refusing to \
+                     skip: a differential that silently ran nothing would report a \
+                     confident green.",
+                    path.display()
+                ))
+            }
+        }
+    }
+}
+
+/// The jar to use, or `None` after printing why the caller should stop.
+///
+/// Reads the process environment and applies [`resolve_jar`]. Panics
+/// on a misconfiguration, which is the whole point of the three-state
+/// resolution: only `Skip` is silent-ish, and only when nobody asked
+/// for strictness.
+#[must_use]
+pub fn jar_from_env() -> Option<PathBuf> {
+    match resolve_jar(
+        std::env::var_os(JAR_VAR),
+        std::env::var_os(JAR_REQUIRED_VAR),
+    ) {
+        Jar::Use(p) => Some(p),
+        Jar::Skip => {
+            eprintln!(
+                "SKIPPED: {JAR_VAR} is not set, so nothing was put to a real HermiT. \
+                 Set it to a ROBOT 1.9.7 jar to run these tests, and set \
+                 {JAR_REQUIRED_VAR} to make an unset {JAR_VAR} a failure."
+            );
+            None
+        }
+        Jar::Misconfigured(msg) => panic!("{msg}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
