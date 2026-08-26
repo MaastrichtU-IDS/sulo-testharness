@@ -186,3 +186,32 @@ the `tests/deferred.rs` pin to say the differential is where it is decided.
     approximated.** Rendering an unknown shape as `owl:Thing` builds a probe
     that cannot clash, which is a question that cannot fail. It is reported as
     `Indeterminate` naming the variant.
+
+## Ruling 12: expected divergences are pinned, and diffed both ways
+
+The differential exits 5 on the real suite today, and correctly: rustdl and
+HermiT genuinely disagree about `timeinstant-datarange`. But a CI job that is
+permanently red gets muted, and a muted alarm is this project's recurring defect
+shape wearing different clothes. It is not enough that the job CAN fail; it has
+to be capable of going green when the world is as documented.
+
+So the differential gains a pinned set of KNOWN divergences, exactly as
+`suites/sulo.golden` pins the known closure and `tests/deferred.rs` pins the
+deferred cases:
+
+* Every divergence the pin describes is expected. A run whose divergences match
+  the pin exits 0.
+* A divergence NOT in the pin is exit 5. Something changed.
+* A divergence IN the pin that no longer occurs is ALSO a failure, not a quiet
+  pass. It means rustdl gained a capability, or SULO changed, or the case moved.
+  Either way the pin is now a lie and must be updated deliberately.
+
+That second direction is the whole point, and is the same discipline the six
+group tests already apply to their `EXPECTED` tables and `tests/deferred.rs`
+applies to `DEFERRED`. A pin that only catches new divergences would silently
+absorb the day the gap closes, which is precisely the news the differential
+exists to deliver.
+
+Re-baselining is explicit, mirroring `--accept-golden`, and the pin records both
+reasoners' answers so a reader can see what the documented disagreement actually
+is rather than only that one exists.
